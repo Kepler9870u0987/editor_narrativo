@@ -1,0 +1,17 @@
+{
+  "name": "editor-narrativo",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Editor Narrativo AI-Augmented (Local-First) — Zero-Knowledge Architecture",
+  "scripts": {
+    "build": "pnpm -r run build",
+    "test": "pnpm -r run test",
+    "lint": "pnpm -r run lint",
+    "typecheck": "pnpm -r run typecheck",
+    "clean": "pnpm -r run clean"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  }
+}
