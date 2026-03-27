@@ -83,7 +83,7 @@ export class SecSyncProvider {
     const clockValue = this.clock.tick();
 
     // Encrypt with AES-256-GCM
-    const { ciphertext, iv } = await encrypt(this.config.encryptionKey, update);
+    const { ciphertext, iv } = await encrypt(this.config.encryptionKey, update as Uint8Array<ArrayBuffer>);
 
     // Build the payload to be signed (includes metadata for tamper protection)
     const signatureInput = this.buildSignatureInput(
@@ -165,7 +165,7 @@ export class SecSyncProvider {
 
     const { ciphertext, iv } = await encrypt(
       this.config.encryptionKey,
-      stateUpdate,
+      stateUpdate as Uint8Array<ArrayBuffer>,
     );
 
     const snapshotId = crypto.randomUUID();
