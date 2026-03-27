@@ -120,30 +120,79 @@ describe('SecSyncProvider', () => {
   });
 
   it('rejects update with invalid signature', async () => {
-    const { provider, transport, doc } = await createTestProvider();
+    // Sender produces an update; a separate receiver tries to apply it with tampered sig
+    const dek = await generateDEK();
+    const subKeys = await deriveSubKeys(dek);
+    const kpSender = await generateSigningKeyPair();
+    const kpReceiver = await generateSigningKeyPair();
 
-    // Make a change to get a real update
-    doc.getText('content').insert(0, 'test');
+    const senderDoc = new Y.Doc();
+    const receiverDoc = new Y.Doc();
+    const senderTransport = createMockTransport();
+    const receiverTransport = createMockTransport();
+
+    new SecSyncProvider(senderDoc, {
+      documentId: 'test-doc',
+      encryptionKey: subKeys.crdtEncryptionKey,
+      signingSecretKey: kpSender.secretKey,
+      signingPublicKey: kpSender.publicKey,
+      transport: senderTransport,
+    });
+
+    const receiver = new SecSyncProvider(receiverDoc, {
+      documentId: 'test-doc',
+      encryptionKey: subKeys.crdtEncryptionKey,
+      signingSecretKey: kpReceiver.secretKey,
+      signingPublicKey: kpReceiver.publicKey,
+      transport: receiverTransport,
+    });
+
+    senderDoc.getText('content').insert(0, 'test');
     await new Promise((r) => setTimeout(r, 50));
 
-    const update = { ...transport.sentUpdates[0]! };
+    const update = { ...senderTransport.sentUpdates[0]! };
     // Tamper the signature
     update.signature = new Uint8Array(64);
 
-    await expect(provider.receiveUpdate(update)).rejects.toThrow('Invalid signature');
+    await expect(receiver.receiveUpdate(update)).rejects.toThrow('Invalid signature');
   });
 
   it('rejects out-of-sequence updates', async () => {
-    const { provider, transport, doc } = await createTestProvider();
+    // Sender produces an update; receiver applies it once, then rejects the same clock
+    const dek = await generateDEK();
+    const subKeys = await deriveSubKeys(dek);
+    const kpSender = await generateSigningKeyPair();
+    const kpReceiver = await generateSigningKeyPair();
 
-    doc.getText('content').insert(0, 'first');
+    const senderDoc = new Y.Doc();
+    const receiverDoc = new Y.Doc();
+    const senderTransport = createMockTransport();
+    const receiverTransport = createMockTransport();
+
+    new SecSyncProvider(senderDoc, {
+      documentId: 'test-doc',
+      encryptionKey: subKeys.crdtEncryptionKey,
+      signingSecretKey: kpSender.secretKey,
+      signingPublicKey: kpSender.publicKey,
+      transport: senderTransport,
+    });
+
+    const receiver = new SecSyncProvider(receiverDoc, {
+      documentId: 'test-doc',
+      encryptionKey: subKeys.crdtEncryptionKey,
+      signingSecretKey: kpReceiver.secretKey,
+      signingPublicKey: kpReceiver.publicKey,
+      transport: receiverTransport,
+    });
+
+    senderDoc.getText('content').insert(0, 'first');
     await new Promise((r) => setTimeout(r, 50));
 
-    const update = transport.sentUpdates[0]!;
+    const update = senderTransport.sentUpdates[0]!;
     // Apply it once (valid)
-    await provider.receiveUpdate(update);
+    await receiver.receiveUpdate(update);
 
     // Trying to apply same clock again → reject
-    await expect(provider.receiveUpdate(update)).rejects.toThrow('Out-of-sequence');
+    await expect(receiver.receiveUpdate(update)).rejects.toThrow('Out-of-sequence');
   });
 });
