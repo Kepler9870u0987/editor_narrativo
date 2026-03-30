@@ -36,6 +36,61 @@ Il JSON deve avere ESATTAMENTE questa struttura:
 
 Se NON trovi contraddizioni, rispondi con: {"hasConflict": false, "conflicts": [], "evidence_chains": []}`;
 
+export function extractJSONObject(rawResponse: string): string | null {
+  const trimmed = rawResponse.trim();
+
+  const fencedMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  const candidate = fencedMatch?.[1]?.trim() ?? trimmed;
+  if (candidate.startsWith('{') && candidate.endsWith('}')) {
+    return candidate;
+  }
+
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  let escaped = false;
+
+  for (let i = 0; i < rawResponse.length; i++) {
+    const char = rawResponse[i];
+
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+
+    if (char === '\\') {
+      escaped = true;
+      continue;
+    }
+
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+
+    if (inString) {
+      continue;
+    }
+
+    if (char === '{') {
+      if (depth === 0) {
+        start = i;
+      }
+      depth++;
+    } else if (char === '}') {
+      depth--;
+      if (depth === 0 && start !== -1) {
+        return rawResponse.slice(start, i + 1);
+      }
+      if (depth < 0) {
+        return null;
+      }
+    }
+  }
+
+  return null;
+}
+
 /**
  * Build the full prompt payload for the LLM API call.
  */
@@ -68,11 +123,10 @@ export function parseLogicCheckResponse(
   rawResponse: string,
 ): LogicCheckResponse | null {
   try {
-    // Try to extract JSON from the response (LLM might wrap it in markdown)
-    const jsonMatch = rawResponse.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) return null;
+    const jsonPayload = extractJSONObject(rawResponse);
+    if (!jsonPayload) return null;
 
-    const parsed = JSON.parse(jsonMatch[0]) as Record<string, unknown>;
+    const parsed = JSON.parse(jsonPayload) as Record<string, unknown>;
 
     if (typeof parsed.hasConflict !== 'boolean') return null;
     if (!Array.isArray(parsed.conflicts)) return null;

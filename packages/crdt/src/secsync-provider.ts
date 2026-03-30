@@ -36,6 +36,7 @@ export class SecSyncProvider {
   private config: SecSyncProviderConfig;
   private clock: LamportClock;
   private isApplyingRemote = false;
+  private remoteClocks = new Map<string, number>();
 
   constructor(doc: Y.Doc, config: SecSyncProviderConfig) {
     this.doc = doc;
@@ -114,10 +115,17 @@ export class SecSyncProvider {
    * Verify, decrypt, and apply a remote update.
    */
   async receiveUpdate(update: SecSyncUpdate): Promise<void> {
-    // Validate clock monotonicity
-    if (!this.clock.isValidNext(update.clock)) {
+    if (update.documentId !== this.config.documentId) {
       throw new Error(
-        `[SecSync] Out-of-sequence update: got clock ${update.clock}, expected > ${this.clock.value}`,
+        `[SecSync] Document mismatch: got ${update.documentId}, expected ${this.config.documentId}`,
+      );
+    }
+
+    const signerId = this.getSignerId(update.publicKey);
+    const lastSeenClock = this.remoteClocks.get(signerId) ?? 0;
+    if (update.clock <= lastSeenClock) {
+      throw new Error(
+        `[SecSync] Out-of-sequence update: got clock ${update.clock}, expected > ${lastSeenClock}`,
       );
     }
 
@@ -150,6 +158,7 @@ export class SecSyncProvider {
     this.isApplyingRemote = true;
     try {
       Y.applyUpdate(this.doc, new Uint8Array(plainUpdate), this);
+      this.remoteClocks.set(signerId, update.clock);
       this.clock.merge(update.clock);
     } finally {
       this.isApplyingRemote = false;
@@ -200,6 +209,12 @@ export class SecSyncProvider {
    * Load and apply a remote snapshot.
    */
   async receiveSnapshot(snapshot: SecSyncSnapshot): Promise<void> {
+    if (snapshot.documentId !== this.config.documentId) {
+      throw new Error(
+        `[SecSync] Document mismatch: got ${snapshot.documentId}, expected ${this.config.documentId}`,
+      );
+    }
+
     const signatureInput = this.buildSignatureInput(
       snapshot.documentId,
       new Uint8Array(snapshot.encryptedData),
@@ -226,6 +241,7 @@ export class SecSyncProvider {
     this.isApplyingRemote = true;
     try {
       Y.applyUpdate(this.doc, new Uint8Array(plainState), this);
+      this.remoteClocks.set(this.getSignerId(snapshot.publicKey), snapshot.clock);
       this.clock.merge(snapshot.clock);
     } finally {
       this.isApplyingRemote = false;
@@ -245,7 +261,8 @@ export class SecSyncProvider {
   ): Uint8Array {
     const encoder = new TextEncoder();
     const docIdBytes = encoder.encode(documentId);
-    const clockBytes = new Uint8Array(new Float64Array([clock]).buffer);
+    const clockBytes = new Uint8Array(8);
+    new DataView(clockBytes.buffer).setBigUint64(0, BigInt(clock), false);
 
     const total =
       docIdBytes.byteLength +
@@ -268,6 +285,12 @@ export class SecSyncProvider {
     buf.set(clockBytes, offset);
 
     return buf;
+  }
+
+  private getSignerId(publicKey: Uint8Array): string {
+    return Array.from(publicKey)
+      .map((byte) => byte.toString(16).padStart(2, '0'))
+      .join('');
   }
 
   get currentClock(): number {

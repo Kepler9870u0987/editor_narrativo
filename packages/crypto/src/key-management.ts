@@ -113,13 +113,18 @@ export async function deriveSubKeys(
   dek: CryptoKey,
 ): Promise<DerivedSubKeys> {
   const dekRaw = await crypto.subtle.exportKey('raw', dek);
+  const dekRawBytes = new Uint8Array(dekRaw);
 
-  const [textEncryptionKey, vectorEncryptionKey, crdtEncryptionKey] =
-    await Promise.all([
-      deriveSubKey(dekRaw, HKDF_INFO.TEXT_ENCRYPTION),
-      deriveSubKey(dekRaw, HKDF_INFO.VECTOR_ENCRYPTION),
-      deriveSubKey(dekRaw, HKDF_INFO.CRDT_ENCRYPTION),
-    ]);
+  try {
+    const [textEncryptionKey, vectorEncryptionKey, crdtEncryptionKey] =
+      await Promise.all([
+        deriveSubKey(dekRaw, HKDF_INFO.TEXT_ENCRYPTION),
+        deriveSubKey(dekRaw, HKDF_INFO.VECTOR_ENCRYPTION),
+        deriveSubKey(dekRaw, HKDF_INFO.CRDT_ENCRYPTION),
+      ]);
 
-  return { textEncryptionKey, vectorEncryptionKey, crdtEncryptionKey };
+    return { textEncryptionKey, vectorEncryptionKey, crdtEncryptionKey };
+  } finally {
+    dekRawBytes.fill(0);
+  }
 }

@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { buildLogicCheckPrompt, parseLogicCheckResponse } from '../src/prompt-builder.js';
+import {
+  buildLogicCheckPrompt,
+  extractJSONObject,
+  parseLogicCheckResponse,
+} from '../src/prompt-builder.js';
 
 describe('buildLogicCheckPrompt', () => {
   it('builds a valid prompt with RAG context', () => {
@@ -72,6 +76,13 @@ describe('parseLogicCheckResponse', () => {
     const result = parseLogicCheckResponse(response);
     expect(result).not.toBeNull();
     expect(result!.hasConflict).toBe(false);
+  });
+
+  it('extracts the first balanced JSON object from noisy output', () => {
+    const response = 'Analisi completata:\n{"hasConflict": false, "conflicts": [], "evidence_chains": []}\nNota finale {non-json}';
+    expect(extractJSONObject(response)).toBe(
+      '{"hasConflict": false, "conflicts": [], "evidence_chains": []}',
+    );
   });
 
   it('returns null on invalid JSON', () => {

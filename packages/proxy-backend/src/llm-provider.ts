@@ -22,6 +22,33 @@ export interface LLMProviderConfig {
   model: string;
 }
 
+export function consumeSSEEvents(buffer: string): {
+  events: string[];
+  remainder: string;
+} {
+  const normalized = buffer.replace(/\r\n/g, '\n');
+  const parts = normalized.split('\n\n');
+  const remainder = parts.pop() ?? '';
+
+  return {
+    events: parts,
+    remainder,
+  };
+}
+
+export function parseSSEEventData(eventBlock: string): string | null {
+  const dataLines = eventBlock
+    .split('\n')
+    .filter((line) => line.startsWith('data:'))
+    .map((line) => line.slice(5).trimStart());
+
+  if (dataLines.length === 0) {
+    return null;
+  }
+
+  return dataLines.join('\n').trim();
+}
+
 /**
  * Abstract LLM provider interface for ZDR-compliant proxy forwarding.
  */
@@ -94,18 +121,20 @@ export class OpenAICompatibleProvider implements LLMProvider {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let fullResponse = '';
+    let pending = '';
 
     try {
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
-        const chunk = decoder.decode(value, { stream: true });
-        const lines = chunk.split('\n').filter((l) => l.startsWith('data: '));
+        pending += decoder.decode(value, { stream: true });
+        const { events, remainder } = consumeSSEEvents(pending);
+        pending = remainder;
 
-        for (const line of lines) {
-          const data = line.slice(6).trim();
-          if (data === '[DONE]') continue;
+        for (const eventBlock of events) {
+          const data = parseSSEEventData(eventBlock);
+          if (!data || data === '[DONE]') continue;
 
           try {
             const parsed = JSON.parse(data) as {
@@ -119,6 +148,22 @@ export class OpenAICompatibleProvider implements LLMProvider {
           } catch {
             // Skip malformed SSE chunks
           }
+        }
+      }
+
+      const tail = parseSSEEventData(pending);
+      if (tail && tail !== '[DONE]') {
+        try {
+          const parsed = JSON.parse(tail) as {
+            choices?: Array<{ delta?: { content?: string } }>;
+          };
+          const token = parsed.choices?.[0]?.delta?.content;
+          if (token) {
+            fullResponse += token;
+            callbacks.onToken(token);
+          }
+        } catch {
+          // Ignore incomplete trailing event.
         }
       }
     } finally {

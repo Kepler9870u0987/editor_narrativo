@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { SessionBufferManager } from '../src/session-buffer.js';
 
 describe('SessionBufferManager', () => {
@@ -12,62 +12,111 @@ describe('SessionBufferManager', () => {
     manager.destroyAll();
   });
 
-  it('creates and retrieves sessions', () => {
-    manager.create('session-1');
+  it('creates owned sessions', () => {
+    const created = manager.create('session-1', 'user-1', new AbortController());
+    expect(created).not.toBeNull();
     expect(manager.has('session-1')).toBe(true);
     expect(manager.activeSessionCount).toBe(1);
   });
 
-  it('appends tokens to a session', () => {
-    manager.create('session-1');
+  it('buffers tokens while detached and flushes them on attach', () => {
+    const controller = new AbortController();
+    manager.create('session-1', 'user-1', controller);
     manager.appendToken('session-1', 'Hello');
     manager.appendToken('session-1', ' world');
 
-    const session = manager.flush('session-1');
-    expect(session).not.toBeNull();
-    expect(session!.tokens).toEqual(['Hello', ' world']);
+    const received: string[] = [];
+    const result = manager.attach('session-1', 'user-1', {
+      onToken: (token) => {
+        received.push(token);
+        return true;
+      },
+      onComplete: () => true,
+      onError: () => true,
+    });
+
+    expect(result.status).toBe('attached');
+    expect(received).toEqual(['Hello', ' world']);
   });
 
-  it('flush removes the session', () => {
-    manager.create('session-1');
-    manager.flush('session-1');
+  it('rejects attach attempts from a different owner', () => {
+    manager.create('session-1', 'user-1', new AbortController());
+
+    const result = manager.attach('session-1', 'user-2', {
+      onToken: () => true,
+      onComplete: () => true,
+      onError: () => true,
+    });
+
+    expect(result.status).toBe('forbidden');
+  });
+
+  it('keeps an active stream attached after reconnect', () => {
+    manager.create('session-1', 'user-1', new AbortController());
+    manager.detach('session-1');
+
+    const tokens: string[] = [];
+    manager.attach('session-1', 'user-1', {
+      onToken: (token) => {
+        tokens.push(token);
+        return true;
+      },
+      onComplete: () => true,
+      onError: () => true,
+    });
+
+    manager.appendToken('session-1', 'live');
+    expect(tokens).toEqual(['live']);
+  });
+
+  it('delivers final result immediately when a completed session reconnects', () => {
+    manager.create('session-1', 'user-1', new AbortController());
+    manager.detach('session-1');
+    manager.completeStream('session-1', {
+      hasConflict: false,
+      conflicts: [],
+      evidence_chains: [],
+    });
+
+    const onComplete = vi.fn(() => true);
+    const result = manager.attach('session-1', 'user-1', {
+      onToken: () => true,
+      onComplete,
+      onError: () => true,
+    });
+
+    expect(result.status).toBe('attached');
+    expect(onComplete).toHaveBeenCalledOnce();
     expect(manager.has('session-1')).toBe(false);
   });
 
-  it('returns null for unknown session', () => {
-    expect(manager.flush('unknown')).toBeNull();
-  });
+  it('aborts upstream work when the session is aborted', () => {
+    const controller = new AbortController();
+    const abortSpy = vi.spyOn(controller, 'abort');
+    manager.create('session-1', 'user-1', controller);
 
-  it('marks stream as completed', () => {
-    manager.create('session-1');
-    manager.appendToken('session-1', 'token');
-    manager.completeStream('session-1', { hasConflict: false });
+    manager.abort('session-1', 'manual abort');
 
-    const session = manager.flush('session-1');
-    expect(session!.streamCompleted).toBe(true);
-    expect(session!.finalResult).toEqual({ hasConflict: false });
-  });
-
-  it('marks stream as errored', () => {
-    manager.create('session-1');
-    manager.errorStream('session-1', 'LLM timeout');
-
-    const session = manager.flush('session-1');
-    expect(session!.streamCompleted).toBe(true);
-    expect(session!.error).toBe('LLM timeout');
-  });
-
-  it('destroyAll cleans up all sessions', () => {
-    manager.create('s1');
-    manager.create('s2');
-    manager.create('s3');
-    expect(manager.activeSessionCount).toBe(3);
-
-    manager.destroyAll();
-    expect(manager.activeSessionCount).toBe(0);
+    expect(abortSpy).toHaveBeenCalledWith('manual abort');
+    expect(manager.has('session-1')).toBe(false);
   });
 
   it('appendToken returns false for non-existent session', () => {
     expect(manager.appendToken('ghost', 'test')).toBe(false);
+  });
+
+  it('aborts sessions that exceed buffer limits', () => {
+    const onAbort = vi.fn();
+    const limitedManager = new SessionBufferManager({
+      maxBufferedTokens: 1,
+      maxBufferedBytes: 10,
+      onAbort,
+    });
+
+    limitedManager.create('session-1', 'user-1', new AbortController());
+    expect(limitedManager.appendToken('session-1', '12345')).toBe(true);
+    expect(limitedManager.appendToken('session-1', '67890')).toBe(false);
+    expect(onAbort).toHaveBeenCalled();
+    expect(limitedManager.has('session-1')).toBe(false);
   });
 });

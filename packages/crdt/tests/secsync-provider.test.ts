@@ -195,4 +195,68 @@ describe('SecSyncProvider', () => {
     // Trying to apply same clock again → reject
     await expect(receiver.receiveUpdate(update)).rejects.toThrow('Out-of-sequence');
   });
+  it('accepts same clock values from different peers', async () => {
+    const dek = await generateDEK();
+    const subKeys = await deriveSubKeys(dek);
+    const kpA = await generateSigningKeyPair();
+    const kpB = await generateSigningKeyPair();
+    const kpReceiver = await generateSigningKeyPair();
+
+    const docA = new Y.Doc();
+    const docB = new Y.Doc();
+    const receiverDoc = new Y.Doc();
+    const transportA = createMockTransport();
+    const transportB = createMockTransport();
+    const receiverTransport = createMockTransport();
+
+    new SecSyncProvider(docA, {
+      documentId: 'shared-doc',
+      encryptionKey: subKeys.crdtEncryptionKey,
+      signingSecretKey: kpA.secretKey,
+      signingPublicKey: kpA.publicKey,
+      transport: transportA,
+    });
+
+    new SecSyncProvider(docB, {
+      documentId: 'shared-doc',
+      encryptionKey: subKeys.crdtEncryptionKey,
+      signingSecretKey: kpB.secretKey,
+      signingPublicKey: kpB.publicKey,
+      transport: transportB,
+    });
+
+    const receiver = new SecSyncProvider(receiverDoc, {
+      documentId: 'shared-doc',
+      encryptionKey: subKeys.crdtEncryptionKey,
+      signingSecretKey: kpReceiver.secretKey,
+      signingPublicKey: kpReceiver.publicKey,
+      transport: receiverTransport,
+    });
+
+    docA.getText('content').insert(0, 'A');
+    docB.getText('content').insert(0, 'B');
+    await new Promise((r) => setTimeout(r, 50));
+
+    const updateA = transportA.sentUpdates[0]!;
+    const updateB = transportB.sentUpdates[0]!;
+    expect(updateA.clock).toBe(1);
+    expect(updateB.clock).toBe(1);
+
+    await expect(receiver.receiveUpdate(updateA)).resolves.toBeUndefined();
+    await expect(receiver.receiveUpdate(updateB)).resolves.toBeUndefined();
+  });
+
+  it('rejects updates for a different document id', async () => {
+    const { doc, transport, provider } = await createTestProvider();
+
+    doc.getText('content').insert(0, 'wrong-doc');
+    await new Promise((r) => setTimeout(r, 50));
+
+    const update = {
+      ...transport.sentUpdates[0]!,
+      documentId: 'other-doc',
+    };
+
+    await expect(provider.receiveUpdate(update)).rejects.toThrow('Document mismatch');
+  });
 });

@@ -19,16 +19,64 @@ export interface JWTPayload {
   [key: string]: unknown;
 }
 
-let encodedSecret: Uint8Array | null = null;
-let config: JWTConfig | null = null;
+export interface JWTService {
+  verifyToken(token: string): Promise<JWTPayload>;
+  createToken(payload: JWTPayload, expiresIn?: string): Promise<string>;
+}
+
+const MIN_SECRET_BYTES = 32;
+
+let defaultService: JWTService | null = null;
+
+function assertValidConfig(cfg: JWTConfig): Uint8Array {
+  const encodedSecret = new TextEncoder().encode(cfg.secret);
+  if (encodedSecret.byteLength < MIN_SECRET_BYTES) {
+    throw new Error(
+      `JWT secret must be at least ${MIN_SECRET_BYTES} bytes`,
+    );
+  }
+
+  return encodedSecret;
+}
+
+export function createJWTService(cfg: JWTConfig): JWTService {
+  const encodedSecret = assertValidConfig(cfg);
+
+  return {
+    async verifyToken(token: string): Promise<JWTPayload> {
+      const { payload } = await jose.jwtVerify(token, encodedSecret, {
+        issuer: cfg.issuer,
+        audience: cfg.audience,
+      });
+
+      if (!payload.sub) {
+        throw new Error('JWT missing required "sub" claim');
+      }
+
+      return payload as JWTPayload;
+    },
+
+    async createToken(
+      payload: JWTPayload,
+      expiresIn = '1h',
+    ): Promise<string> {
+      return new jose.SignJWT(payload)
+        .setProtectedHeader({ alg: 'HS256' })
+        .setIssuedAt()
+        .setExpirationTime(expiresIn)
+        .setIssuer(cfg.issuer ?? 'editor-narrativo')
+        .setAudience(cfg.audience ?? 'editor-narrativo')
+        .sign(encodedSecret);
+    },
+  };
+}
 
 /**
  * Initialize JWT verification with the given config.
  * Must be called before verifyToken.
  */
 export function initJWT(cfg: JWTConfig): void {
-  config = cfg;
-  encodedSecret = new TextEncoder().encode(cfg.secret);
+  defaultService = createJWTService(cfg);
 }
 
 /**
@@ -36,20 +84,11 @@ export function initJWT(cfg: JWTConfig): void {
  * Throws on invalid/expired tokens.
  */
 export async function verifyToken(token: string): Promise<JWTPayload> {
-  if (!encodedSecret || !config) {
+  if (!defaultService) {
     throw new Error('JWT not initialized. Call initJWT() first.');
   }
 
-  const { payload } = await jose.jwtVerify(token, encodedSecret, {
-    issuer: config.issuer,
-    audience: config.audience,
-  });
-
-  if (!payload.sub) {
-    throw new Error('JWT missing required "sub" claim');
-  }
-
-  return payload as JWTPayload;
+  return defaultService.verifyToken(token);
 }
 
 /**
@@ -59,15 +98,9 @@ export async function createToken(
   payload: JWTPayload,
   expiresIn = '1h',
 ): Promise<string> {
-  if (!encodedSecret || !config) {
+  if (!defaultService) {
     throw new Error('JWT not initialized. Call initJWT() first.');
   }
 
-  return new jose.SignJWT(payload)
-    .setProtectedHeader({ alg: 'HS256' })
-    .setIssuedAt()
-    .setExpirationTime(expiresIn)
-    .setIssuer(config.issuer ?? 'editor-narrativo')
-    .setAudience(config.audience ?? 'editor-narrativo')
-    .sign(encodedSecret);
+  return defaultService.createToken(payload, expiresIn);
 }

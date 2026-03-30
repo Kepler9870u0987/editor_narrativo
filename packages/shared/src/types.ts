@@ -34,13 +34,13 @@ export interface SigningKeyPair {
 // ─── Crypto Worker Messages ────────────────────────────────────
 
 export type CryptoWorkerRequest =
-  | { type: 'DERIVE_KEK'; password: string; salt: Uint8Array }
-  | { type: 'GENERATE_SIGNING_KEYPAIR' };
+  | { requestId: number; type: 'DERIVE_KEK'; password: string; salt: Uint8Array }
+  | { requestId: number; type: 'GENERATE_SIGNING_KEYPAIR' };
 
 export type CryptoWorkerResponse =
-  | { type: 'KEK_DERIVED'; kek: ArrayBuffer }
-  | { type: 'SIGNING_KEYPAIR_GENERATED'; publicKey: Uint8Array; secretKey: Uint8Array }
-  | { type: 'ERROR'; message: string };
+  | { requestId: number; type: 'KEK_DERIVED'; kek: ArrayBuffer }
+  | { requestId: number; type: 'SIGNING_KEYPAIR_GENERATED'; publicKey: Uint8Array; secretKey: Uint8Array }
+  | { requestId: number; type: 'ERROR'; message: string };
 
 // ─── CRDT / SecSync Types ──────────────────────────────────────
 
@@ -107,6 +107,10 @@ export interface LogicCheckRequest {
   /** RAG context passages from the Story Bible */
   ragContext: string[];
   /** Session ID for WebSocket reconnection */
+  sessionId?: string;
+}
+
+export interface WSLogicCheckRequest extends LogicCheckRequest {
   sessionId: string;
 }
 
@@ -138,12 +142,14 @@ export interface PIIMask {
 
 export type WSClientMessage =
   | { type: 'AUTH'; token: string }
-  | { type: 'LOGIC_CHECK'; payload: LogicCheckRequest }
+  | { type: 'CREATE_SESSION' }
+  | { type: 'LOGIC_CHECK'; payload: WSLogicCheckRequest }
   | { type: 'RECONNECT'; sessionId: string };
 
 export type WSServerMessage =
   | { type: 'AUTH_OK' }
   | { type: 'AUTH_FAIL'; reason: string }
+  | { type: 'SESSION_READY'; sessionId: string }
   | { type: 'STREAM_TOKEN'; token: string; sessionId: string }
   | { type: 'STREAM_END'; sessionId: string; result: LogicCheckResponse }
   | { type: 'STREAM_ERROR'; sessionId: string; message: string }

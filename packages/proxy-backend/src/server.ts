@@ -14,17 +14,23 @@ import fastifyRateLimit from '@fastify/rate-limit';
 import type { WebSocket } from '@fastify/websocket';
 
 import type {
-  WSClientMessage,
   WSServerMessage,
-  LogicCheckRequest,
+  LogicCheckResponse,
 } from '@editor-narrativo/shared';
 import { WS_HEARTBEAT_INTERVAL_MS } from '@editor-narrativo/shared';
 
 import { PIIMasker } from './pii-masker.js';
-import { SessionBufferManager } from './session-buffer.js';
+import {
+  SessionBufferManager,
+  type SessionAttachment,
+} from './session-buffer.js';
 import { buildLogicCheckPrompt, parseLogicCheckResponse } from './prompt-builder.js';
-import { initJWT, verifyToken } from './auth.js';
+import { createJWTService } from './auth.js';
 import type { LLMProvider, LLMMessage } from './llm-provider.js';
+import {
+  parseLogicCheckRequest,
+  parseWSClientMessage,
+} from './request-validation.js';
 
 export interface ServerConfig {
   port: number;
@@ -33,11 +39,215 @@ export interface ServerConfig {
   jwtIssuer?: string;
   jwtAudience?: string;
   llmProvider: LLMProvider;
+  allowedOrigins?: string[];
+}
+
+const FASTIFY_BODY_LIMIT_BYTES = 256 * 1024;
+const MAX_WS_MESSAGES_PER_MINUTE = 120;
+const MAX_CONCURRENT_STREAMS_PER_USER = 3;
+const MAX_BUFFERED_TOKENS_PER_SESSION = 2_000;
+const MAX_BUFFERED_BYTES_PER_SESSION = 256 * 1024;
+const EMPTY_LOGIC_CHECK_RESULT: LogicCheckResponse = {
+  hasConflict: false,
+  conflicts: [],
+  evidence_chains: [],
+};
+
+interface WebSocketUserState {
+  messageTimestamps: number[];
+  activeSessions: Set<string>;
+}
+
+function rawMessageToString(raw: Buffer | ArrayBuffer | Buffer[]): string {
+  if (Array.isArray(raw)) {
+    return Buffer.concat(raw).toString('utf8');
+  }
+
+  if (raw instanceof ArrayBuffer) {
+    return Buffer.from(raw).toString('utf8');
+  }
+
+  return raw.toString('utf8');
+}
+
+function normalizeOrigin(origin: string): string | null {
+  try {
+    return new URL(origin).origin;
+  } catch {
+    return null;
+  }
+}
+
+function isOriginAllowed(
+  origin: string | undefined,
+  config: ServerConfig,
+): boolean {
+  if (!origin) {
+    return true;
+  }
+
+  const normalizedOrigin = normalizeOrigin(origin);
+  if (!normalizedOrigin) {
+    return false;
+  }
+
+  if (config.allowedOrigins && config.allowedOrigins.length > 0) {
+    return config.allowedOrigins.includes(normalizedOrigin);
+  }
+
+  const expectedHosts = new Set<string>([config.host]);
+  if (config.host === '0.0.0.0' || config.host === '::') {
+    expectedHosts.add('127.0.0.1');
+    expectedHosts.add('localhost');
+  }
+
+  const parsedOrigin = new URL(normalizedOrigin);
+  return expectedHosts.has(parsedOrigin.hostname);
+}
+
+function resolveAllowedOrigin(
+  origin: string | undefined,
+  config: ServerConfig,
+): string | null {
+  if (!origin) {
+    return null;
+  }
+
+  const normalizedOrigin = normalizeOrigin(origin);
+  if (!normalizedOrigin || !isOriginAllowed(origin, config)) {
+    return null;
+  }
+
+  return normalizedOrigin;
+}
+
+function getUserState(
+  states: Map<string, WebSocketUserState>,
+  userId: string,
+): WebSocketUserState {
+  const existing = states.get(userId);
+  if (existing) {
+    return existing;
+  }
+
+  const created: WebSocketUserState = {
+    messageTimestamps: [],
+    activeSessions: new Set<string>(),
+  };
+  states.set(userId, created);
+  return created;
+}
+
+function consumeRateLimitSlot(state: WebSocketUserState, now = Date.now()): boolean {
+  const cutoff = now - 60_000;
+  state.messageTimestamps = state.messageTimestamps.filter((ts) => ts >= cutoff);
+  if (state.messageTimestamps.length >= MAX_WS_MESSAGES_PER_MINUTE) {
+    return false;
+  }
+  state.messageTimestamps.push(now);
+  return true;
+}
+
+function sendSocketMessage(
+  socket: WebSocket,
+  message: WSServerMessage,
+): boolean {
+  if (socket.readyState !== socket.OPEN) {
+    return false;
+  }
+
+  try {
+    socket.send(JSON.stringify(message));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function createSocketAttachment(
+  socket: WebSocket,
+  sessionId: string,
+  attachedSessions: Set<string>,
+): SessionAttachment {
+  return {
+    onToken: (token) => {
+      const sent = sendSocketMessage(socket, {
+        type: 'STREAM_TOKEN',
+        token,
+        sessionId,
+      });
+      if (!sent) {
+        attachedSessions.delete(sessionId);
+      }
+      return sent;
+    },
+    onComplete: (result) => {
+      attachedSessions.delete(sessionId);
+      return sendSocketMessage(socket, {
+        type: 'STREAM_END',
+        sessionId,
+        result,
+      });
+    },
+    onError: (message) => {
+      attachedSessions.delete(sessionId);
+      return sendSocketMessage(socket, {
+        type: 'STREAM_ERROR',
+        sessionId,
+        message,
+      });
+    },
+  };
+}
+
+function collectStreamCompletion(
+  provider: LLMProvider,
+  messages: LLMMessage[],
+  abortSignal?: AbortSignal,
+): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    let settled = false;
+    let fullResponse = '';
+
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      if (abortSignal) {
+        abortSignal.removeEventListener('abort', onAbort);
+      }
+      fn();
+    };
+
+    const controller = provider.streamCompletion(messages, {
+      onToken: (token) => {
+        fullResponse += token;
+      },
+      onComplete: (response) => {
+        finish(() => resolve(response || fullResponse));
+      },
+      onError: (error) => {
+        finish(() => reject(error));
+      },
+    });
+
+    const onAbort = () => {
+      controller.abort('Client disconnected');
+      finish(() => reject(new Error('LLM stream aborted')));
+    };
+
+    if (abortSignal?.aborted) {
+      onAbort();
+      return;
+    }
+
+    abortSignal?.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 export async function createServer(config: ServerConfig) {
   // ── Zero logging policy: only stderr for crashes ─────────
   const server = Fastify({
+    bodyLimit: FASTIFY_BODY_LIMIT_BYTES,
     logger: {
       level: 'error',
       transport: undefined, // No file transport — stderr only
@@ -49,23 +259,77 @@ export async function createServer(config: ServerConfig) {
   await server.register(fastifyRateLimit, {
     max: 60,
     timeWindow: '1 minute',
+    keyGenerator: (request) => request.headers.authorization ?? request.ip,
+  });
+
+  server.addHook('onRequest', async (request, reply) => {
+    const allowedOrigin = resolveAllowedOrigin(request.headers.origin, config);
+    if (request.headers.origin && !allowedOrigin) {
+      return reply.code(403).send({ error: 'Origin not allowed' });
+    }
+
+    if (allowedOrigin) {
+      reply.header('Access-Control-Allow-Origin', allowedOrigin);
+      reply.header('Vary', 'Origin');
+      reply.header('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+      reply.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    }
+
+    if (request.method === 'OPTIONS') {
+      return reply.code(204).send();
+    }
   });
 
   // ── JWT Setup ────────────────────────────────────────────
-  initJWT({
+  const jwtService = createJWTService({
     secret: config.jwtSecret,
     issuer: config.jwtIssuer,
     audience: config.jwtAudience,
   });
 
   // ── Session Buffer Manager ───────────────────────────────
-  const bufferManager = new SessionBufferManager();
+  const userStates = new Map<string, WebSocketUserState>();
+  const issuedSessions = new Map<string, Set<string>>();
+
+  const releaseUserSession = (ownerId: string, sessionId: string) => {
+    const state = userStates.get(ownerId);
+    if (!state) return;
+    state.activeSessions.delete(sessionId);
+  };
+
+  const issueSession = (ownerId: string): string => {
+    const sessionId = crypto.randomUUID();
+    const current = issuedSessions.get(ownerId) ?? new Set<string>();
+    current.add(sessionId);
+    issuedSessions.set(ownerId, current);
+    return sessionId;
+  };
+
+  const consumeIssuedSession = (ownerId: string, sessionId: string): boolean => {
+    const current = issuedSessions.get(ownerId);
+    if (!current?.has(sessionId)) {
+      return false;
+    }
+    current.delete(sessionId);
+    if (current.size === 0) {
+      issuedSessions.delete(ownerId);
+    }
+    return true;
+  };
+
+  const bufferManager = new SessionBufferManager({
+    maxBufferedTokens: MAX_BUFFERED_TOKENS_PER_SESSION,
+    maxBufferedBytes: MAX_BUFFERED_BYTES_PER_SESSION,
+    onAbort: (sessionId, session) => {
+      releaseUserSession(session.ownerId, sessionId);
+    },
+  });
 
   // ── Health Check ─────────────────────────────────────────
-  server.get('/health', async () => ({ status: 'ok', sessions: bufferManager.activeSessionCount }));
+  server.get('/health', async () => ({ status: 'ok' }));
 
   // ── REST Endpoint (non-streaming) ────────────────────────
-  server.post<{ Body: LogicCheckRequest }>('/api/llm/complete', async (request, reply) => {
+  server.post('/api/llm/complete', async (request, reply) => {
     // JWT auth via Authorization header
     const authHeader = request.headers.authorization;
     if (!authHeader?.startsWith('Bearer ')) {
@@ -73,14 +337,23 @@ export async function createServer(config: ServerConfig) {
     }
 
     try {
-      await verifyToken(authHeader.slice(7));
+      await jwtService.verifyToken(authHeader.slice(7));
     } catch {
       return reply.code(401).send({ error: 'Invalid token' });
     }
 
+    const body = parseLogicCheckRequest(request.body);
+    if (!body) {
+      return reply.code(400).send({ error: 'Invalid request payload' });
+    }
+
     const masker = new PIIMasker();
+    const abortController = new AbortController();
+    const handleAbort = () => {
+      abortController.abort('Client disconnected');
+    };
+    request.raw.once('close', handleAbort);
     try {
-      const body = request.body;
       const maskedScene = masker.mask(body.sceneText);
       const maskedContext = body.ragContext.map((c) => masker.mask(c));
 
@@ -91,14 +364,11 @@ export async function createServer(config: ServerConfig) {
       });
 
       // Forward to LLM (collect full response, no streaming for REST)
-      const fullResponse = await new Promise<string>((resolve, reject) => {
-        let response = '';
-        config.llmProvider.streamCompletion(messages as LLMMessage[], {
-          onToken: (token) => { response += token; },
-          onComplete: () => resolve(response),
-          onError: reject,
-        });
-      });
+      const fullResponse = await collectStreamCompletion(
+        config.llmProvider,
+        messages,
+        abortController.signal,
+      );
 
       // De-mask PII in the response
       const demaskedResponse = masker.demask(fullResponse);
@@ -109,16 +379,40 @@ export async function createServer(config: ServerConfig) {
       }
 
       return parsed;
+    } catch (err) {
+      if (abortController.signal.aborted) {
+        return reply.code(499).send({ error: 'Request aborted' });
+      }
+      throw err;
     } finally {
+      request.raw.off('close', handleAbort);
       masker.destroy();
     }
   });
 
   // ── WebSocket Endpoint ───────────────────────────────────
-  server.get('/ws', { websocket: true }, (socket: WebSocket) => {
+  server.get('/ws', { websocket: true }, (socket: WebSocket, request) => {
+    if (!isOriginAllowed(request.headers.origin, config)) {
+      socket.close(4003, 'Origin not allowed');
+      return;
+    }
+
     let authenticated = false;
     let userId: string | null = null;
     let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+    const attachedSessions = new Set<string>();
+
+    const cleanupSocket = () => {
+      if (heartbeatTimer) {
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = null;
+      }
+
+      for (const sessionId of attachedSessions) {
+        bufferManager.detach(sessionId);
+      }
+      attachedSessions.clear();
+    };
 
     // Heartbeat
     heartbeatTimer = setInterval(() => {
@@ -129,59 +423,69 @@ export async function createServer(config: ServerConfig) {
 
     socket.on('message', async (raw: Buffer | ArrayBuffer | Buffer[]) => {
       try {
-        const msg = JSON.parse(raw.toString()) as WSClientMessage;
+        const msg = parseWSClientMessage(JSON.parse(rawMessageToString(raw)));
+        if (!msg) {
+          socket.close(4400, 'Invalid message');
+          return;
+        }
 
         // ── AUTH (must be first message) ─────────────────
         if (msg.type === 'AUTH') {
           try {
-            const payload = await verifyToken(msg.token);
+            const payload = await jwtService.verifyToken(msg.token);
             authenticated = true;
             userId = payload.sub;
-            const response: WSServerMessage = { type: 'AUTH_OK' };
-            socket.send(JSON.stringify(response));
+            sendSocketMessage(socket, { type: 'AUTH_OK' });
           } catch {
-            const response: WSServerMessage = {
+            sendSocketMessage(socket, {
               type: 'AUTH_FAIL',
               reason: 'Invalid JWT token',
-            };
-            socket.send(JSON.stringify(response));
+            });
             socket.close(4001, 'Authentication failed');
           }
           return;
         }
 
-        if (!authenticated) {
+        if (!authenticated || !userId) {
           socket.close(4001, 'Not authenticated');
+          return;
+        }
+
+        const userState = getUserState(userStates, userId);
+        if (!consumeRateLimitSlot(userState)) {
+          socket.close(4408, 'Rate limit exceeded');
+          return;
+        }
+
+        if (msg.type === 'CREATE_SESSION') {
+          const sessionId = issueSession(userId);
+          sendSocketMessage(socket, { type: 'SESSION_READY', sessionId });
           return;
         }
 
         // ── RECONNECT (flush buffered tokens) ───────────
         if (msg.type === 'RECONNECT') {
-          const session = bufferManager.flush(msg.sessionId);
-          if (session) {
-            const flushMsg: WSServerMessage = {
-              type: 'BUFFER_FLUSH',
-              tokens: session.tokens,
-              sessionId: msg.sessionId,
-            };
-            socket.send(JSON.stringify(flushMsg));
+          const attachment = createSocketAttachment(
+            socket,
+            msg.sessionId,
+            attachedSessions,
+          );
+          attachedSessions.add(msg.sessionId);
 
-            if (session.streamCompleted && session.finalResult) {
-              const endMsg: WSServerMessage = {
-                type: 'STREAM_END',
-                sessionId: msg.sessionId,
-                result: session.finalResult as any,
-              };
-              socket.send(JSON.stringify(endMsg));
-            }
-            if (session.error) {
-              const errMsg: WSServerMessage = {
-                type: 'STREAM_ERROR',
-                sessionId: msg.sessionId,
-                message: session.error,
-              };
-              socket.send(JSON.stringify(errMsg));
-            }
+          const attachResult = bufferManager.attach(msg.sessionId, userId, attachment);
+          if (attachResult.status === 'forbidden') {
+            attachedSessions.delete(msg.sessionId);
+            socket.close(4003, 'Session access denied');
+            return;
+          }
+
+          if (attachResult.status === 'missing') {
+            attachedSessions.delete(msg.sessionId);
+            sendSocketMessage(socket, {
+              type: 'STREAM_ERROR',
+              sessionId: msg.sessionId,
+              message: 'Session not found or expired',
+            });
           }
           return;
         }
@@ -190,42 +494,76 @@ export async function createServer(config: ServerConfig) {
         if (msg.type === 'LOGIC_CHECK') {
           const { payload } = msg;
           const { sessionId } = payload;
+          const ownerId = userId;
+          if (userState.activeSessions.size >= MAX_CONCURRENT_STREAMS_PER_USER) {
+            sendSocketMessage(socket, {
+              type: 'STREAM_ERROR',
+              sessionId,
+              message: 'Too many concurrent streams for this user',
+            });
+            return;
+          }
+
+          if (!consumeIssuedSession(userId, sessionId)) {
+            sendSocketMessage(socket, {
+              type: 'STREAM_ERROR',
+              sessionId,
+              message: 'Session ID not issued by the server',
+            });
+            return;
+          }
+
+          const attachment = createSocketAttachment(
+            socket,
+            sessionId,
+            attachedSessions,
+          );
+          const session = bufferManager.create(sessionId, userId, null, attachment);
+
+          if (!session) {
+            sendSocketMessage(socket, {
+              type: 'STREAM_ERROR',
+              sessionId,
+              message: 'Session ID already in use',
+            });
+            return;
+          }
+
+          userState.activeSessions.add(sessionId);
+          attachedSessions.add(sessionId);
 
           const masker = new PIIMasker();
           const maskedScene = masker.mask(payload.sceneText);
           const maskedContext = payload.ragContext.map((c) => masker.mask(c));
 
-          const messages = buildLogicCheckPrompt({
+          const messages: LLMMessage[] = buildLogicCheckPrompt({
             ...payload,
             sceneText: maskedScene,
             ragContext: maskedContext,
           });
 
-          config.llmProvider.streamCompletion(messages as LLMMessage[], {
+          const controller = config.llmProvider.streamCompletion(messages, {
             onToken: (token) => {
               const demaskedToken = masker.demask(token);
 
-              if (socket.readyState === socket.OPEN) {
-                const msg: WSServerMessage = {
-                  type: 'STREAM_TOKEN',
-                  token: demaskedToken,
-                  sessionId,
-                };
-                socket.send(JSON.stringify(msg));
-              } else {
+              bufferManager.appendToken(sessionId, demaskedToken);
+              if (false && bufferManager.has(sessionId)) {
                 // Client disconnected — buffer the token (Detach, Don't Destroy)
                 if (!bufferManager.has(sessionId)) {
-                  bufferManager.create(sessionId);
+                  bufferManager.create(sessionId, userId!, null);
                 }
                 bufferManager.appendToken(sessionId, demaskedToken);
               }
             },
             onComplete: (fullResponse) => {
               const demaskedFull = masker.demask(fullResponse);
-              const parsed = parseLogicCheckResponse(demaskedFull);
+              const parsed =
+                parseLogicCheckResponse(demaskedFull) ?? EMPTY_LOGIC_CHECK_RESULT;
               masker.destroy();
 
-              if (socket.readyState === socket.OPEN) {
+              releaseUserSession(ownerId, sessionId);
+              bufferManager.completeStream(sessionId, parsed);
+              if (false) {
                 const result = parsed ?? {
                   hasConflict: false,
                   conflicts: [],
@@ -237,47 +575,60 @@ export async function createServer(config: ServerConfig) {
                   result,
                 };
                 socket.send(JSON.stringify(msg));
-              } else {
-                bufferManager.completeStream(sessionId, parsed);
               }
             },
             onError: (err) => {
               masker.destroy();
-              if (socket.readyState === socket.OPEN) {
+              releaseUserSession(ownerId, sessionId);
+              bufferManager.errorStream(sessionId, err.message);
+              if (false) {
                 const msg: WSServerMessage = {
                   type: 'STREAM_ERROR',
                   sessionId,
                   message: err.message,
                 };
                 socket.send(JSON.stringify(msg));
-              } else {
-                bufferManager.errorStream(sessionId, err.message);
               }
             },
           });
+          bufferManager.setController(sessionId, controller);
         }
-      } catch (err) {
+      } catch {
+        socket.close(4400, 'Invalid message');
         // Malformed message — ignore (ZDR: don't log payloads)
       }
     });
 
     socket.on('close', () => {
-      if (heartbeatTimer) clearInterval(heartbeatTimer);
+      cleanupSocket();
     });
 
     socket.on('error', () => {
-      if (heartbeatTimer) clearInterval(heartbeatTimer);
+      cleanupSocket();
     });
   });
 
   // ── Graceful shutdown ───────────────────────────────────
+  let shuttingDown = false;
   const shutdown = async () => {
-    bufferManager.destroyAll();
+    if (shuttingDown) {
+      return;
+    }
+    shuttingDown = true;
     await server.close();
   };
 
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
+  const handleSignal = () => {
+    void shutdown();
+  };
+
+  process.on('SIGINT', handleSignal);
+  process.on('SIGTERM', handleSignal);
+  server.addHook('onClose', async () => {
+    process.off('SIGINT', handleSignal);
+    process.off('SIGTERM', handleSignal);
+    bufferManager.destroyAll();
+  });
 
   return server;
 }

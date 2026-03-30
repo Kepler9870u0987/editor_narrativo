@@ -9,34 +9,64 @@ import {
   type CryptoWorkerResponse,
 } from '@editor-narrativo/shared';
 
+type CryptoWorkerClientRequest =
+  | { type: 'DERIVE_KEK'; password: string; salt: Uint8Array }
+  | { type: 'GENERATE_SIGNING_KEYPAIR' };
+
 export class CryptoWorkerClient {
   private worker: Worker;
+  private nextRequestId = 1;
+  private pending = new Map<number, {
+    resolve: (result: CryptoWorkerResponse) => void;
+    reject: (error: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
 
   constructor(workerUrl: URL) {
     this.worker = new Worker(workerUrl, { type: 'module' });
+    this.worker.addEventListener('message', this.handleMessage);
+    this.worker.addEventListener('error', this.handleError);
   }
 
+  private handleMessage = (e: MessageEvent<CryptoWorkerResponse>) => {
+    const pending = this.pending.get(e.data.requestId);
+    if (!pending) {
+      return;
+    }
+
+    clearTimeout(pending.timer);
+    this.pending.delete(e.data.requestId);
+
+    if (e.data.type === 'ERROR') {
+      pending.reject(new Error(e.data.message));
+    } else {
+      pending.resolve(e.data);
+    }
+  };
+
+  private handleError = (e: ErrorEvent) => {
+    const error = new Error(e.message || 'Crypto worker error');
+    for (const [requestId, pending] of this.pending) {
+      clearTimeout(pending.timer);
+      pending.reject(error);
+      this.pending.delete(requestId);
+    }
+  };
+
   private send(
-    request: CryptoWorkerRequest,
+    request: CryptoWorkerClientRequest,
     timeoutMs = CRYPTO_WORKER_TIMEOUT_MS,
   ): Promise<CryptoWorkerResponse> {
     return new Promise((resolve, reject) => {
+      const requestId = this.nextRequestId++;
       const timer = setTimeout(() => {
+        this.pending.delete(requestId);
         reject(new Error('Crypto worker timeout'));
       }, timeoutMs);
 
-      const handler = (e: MessageEvent<CryptoWorkerResponse>) => {
-        clearTimeout(timer);
-        this.worker.removeEventListener('message', handler);
-        if (e.data.type === 'ERROR') {
-          reject(new Error(e.data.message));
-        } else {
-          resolve(e.data);
-        }
-      };
-
-      this.worker.addEventListener('message', handler);
-      this.worker.postMessage(request);
+      this.pending.set(requestId, { resolve, reject, timer });
+      const requestWithId = { ...request, requestId } as CryptoWorkerRequest;
+      this.worker.postMessage(requestWithId);
     });
   }
 
@@ -66,6 +96,13 @@ export class CryptoWorkerClient {
   }
 
   terminate(): void {
+    this.worker.removeEventListener('message', this.handleMessage);
+    this.worker.removeEventListener('error', this.handleError);
+    for (const [requestId, pending] of this.pending) {
+      clearTimeout(pending.timer);
+      pending.reject(new Error('Crypto worker terminated'));
+      this.pending.delete(requestId);
+    }
     this.worker.terminate();
   }
 }

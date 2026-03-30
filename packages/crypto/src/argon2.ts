@@ -6,7 +6,7 @@
  *
  * Usage from main thread:
  *   const worker = new Worker(new URL('./crypto-worker.ts', import.meta.url));
- *   worker.postMessage({ type: 'DERIVE_KEK', password, salt });
+ *   worker.postMessage({ requestId: 1, type: 'DERIVE_KEK', password, salt });
  */
 
 import sodium from 'libsodium-wrappers-sumo';
@@ -43,16 +43,21 @@ export async function deriveKEK(
     );
   }
 
-  const kek = sodium.crypto_pwhash(
-    KEY_LENGTH_BYTES,
-    password,
-    salt,
-    ARGON2_OPS_LIMIT,
-    ARGON2_MEMORY_LIMIT,
-    sodium.crypto_pwhash_ALG_ARGON2ID13,
-  );
+  const passwordBytes = sodium.from_string(password);
+  try {
+    const kek = sodium.crypto_pwhash(
+      KEY_LENGTH_BYTES,
+      passwordBytes,
+      salt,
+      ARGON2_OPS_LIMIT,
+      ARGON2_MEMORY_LIMIT,
+      sodium.crypto_pwhash_ALG_ARGON2ID13,
+    );
 
-  return kek.buffer as ArrayBuffer;
+    return kek.buffer as ArrayBuffer;
+  } finally {
+    passwordBytes.fill(0);
+  }
 }
 
 /**
@@ -76,6 +81,7 @@ if (isWorker) {
       if (msg.type === 'DERIVE_KEK') {
         const kek = await deriveKEK(msg.password, msg.salt);
         const response: CryptoWorkerResponse = {
+          requestId: msg.requestId,
           type: 'KEK_DERIVED',
           kek,
         };
@@ -84,6 +90,7 @@ if (isWorker) {
         await ensureSodium();
         const kp = sodium.crypto_sign_keypair();
         const response: CryptoWorkerResponse = {
+          requestId: msg.requestId,
           type: 'SIGNING_KEYPAIR_GENERATED',
           publicKey: kp.publicKey,
           secretKey: kp.privateKey,
@@ -92,6 +99,7 @@ if (isWorker) {
       }
     } catch (err) {
       const response: CryptoWorkerResponse = {
+        requestId: e.data.requestId,
         type: 'ERROR',
         message: err instanceof Error ? err.message : 'Unknown crypto worker error',
       };
