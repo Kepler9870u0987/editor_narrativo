@@ -24,6 +24,18 @@ export interface JWTService {
   createToken(payload: JWTPayload, expiresIn?: string): Promise<string>;
 }
 
+export interface JWTVerifier {
+  verifyToken(token: string): Promise<JWTPayload>;
+}
+
+export type JWTVerificationConfig =
+  | JWTConfig
+  | {
+      jwks: jose.JSONWebKeySet;
+      issuer?: string;
+      audience?: string;
+    };
+
 const MIN_SECRET_BYTES = 32;
 
 let defaultService: JWTService | null = null;
@@ -67,6 +79,28 @@ export function createJWTService(cfg: JWTConfig): JWTService {
         .setIssuer(cfg.issuer ?? 'editor-narrativo')
         .setAudience(cfg.audience ?? 'editor-narrativo')
         .sign(encodedSecret);
+    },
+  };
+}
+
+export function createJWTVerifier(cfg: JWTVerificationConfig): JWTVerifier {
+  if ('secret' in cfg) {
+    return createJWTService(cfg);
+  }
+
+  const keySet = jose.createLocalJWKSet(cfg.jwks);
+  return {
+    async verifyToken(token: string): Promise<JWTPayload> {
+      const { payload } = await jose.jwtVerify(token, keySet, {
+        issuer: cfg.issuer,
+        audience: cfg.audience,
+      });
+
+      if (!payload.sub) {
+        throw new Error('JWT missing required "sub" claim');
+      }
+
+      return payload as JWTPayload;
     },
   };
 }

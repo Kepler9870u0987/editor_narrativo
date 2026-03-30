@@ -3,12 +3,15 @@ export { SessionBufferManager, type BufferedSession } from './session-buffer.js'
 export { buildLogicCheckPrompt, parseLogicCheckResponse } from './prompt-builder.js';
 export {
   createJWTService,
+  createJWTVerifier,
   initJWT,
   verifyToken,
   createToken,
   type JWTConfig,
   type JWTPayload,
   type JWTService,
+  type JWTVerifier,
+  type JWTVerificationConfig,
 } from './auth.js';
 export {
   OpenAICompatibleProvider,

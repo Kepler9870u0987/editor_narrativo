@@ -12,6 +12,7 @@ import Fastify from 'fastify';
 import fastifyWebsocket from '@fastify/websocket';
 import fastifyRateLimit from '@fastify/rate-limit';
 import type { WebSocket } from '@fastify/websocket';
+import type { JSONWebKeySet } from 'jose';
 
 import type {
   WSServerMessage,
@@ -25,7 +26,7 @@ import {
   type SessionAttachment,
 } from './session-buffer.js';
 import { buildLogicCheckPrompt, parseLogicCheckResponse } from './prompt-builder.js';
-import { createJWTService } from './auth.js';
+import { createJWTVerifier } from './auth.js';
 import type { LLMProvider, LLMMessage } from './llm-provider.js';
 import {
   parseLogicCheckRequest,
@@ -35,7 +36,8 @@ import {
 export interface ServerConfig {
   port: number;
   host: string;
-  jwtSecret: string;
+  jwtSecret?: string;
+  jwtJWKS?: JSONWebKeySet;
   jwtIssuer?: string;
   jwtAudience?: string;
   llmProvider: LLMProvider;
@@ -281,11 +283,17 @@ export async function createServer(config: ServerConfig) {
   });
 
   // ── JWT Setup ────────────────────────────────────────────
-  const jwtService = createJWTService({
-    secret: config.jwtSecret,
-    issuer: config.jwtIssuer,
-    audience: config.jwtAudience,
-  });
+  const jwtVerifier = config.jwtJWKS
+    ? createJWTVerifier({
+        jwks: config.jwtJWKS,
+        issuer: config.jwtIssuer,
+        audience: config.jwtAudience,
+      })
+    : createJWTVerifier({
+        secret: config.jwtSecret ?? '',
+        issuer: config.jwtIssuer,
+        audience: config.jwtAudience,
+      });
 
   // ── Session Buffer Manager ───────────────────────────────
   const userStates = new Map<string, WebSocketUserState>();
@@ -337,7 +345,7 @@ export async function createServer(config: ServerConfig) {
     }
 
     try {
-      await jwtService.verifyToken(authHeader.slice(7));
+      await jwtVerifier.verifyToken(authHeader.slice(7));
     } catch {
       return reply.code(401).send({ error: 'Invalid token' });
     }
@@ -432,7 +440,7 @@ export async function createServer(config: ServerConfig) {
         // ── AUTH (must be first message) ─────────────────
         if (msg.type === 'AUTH') {
           try {
-            const payload = await jwtService.verifyToken(msg.token);
+            const payload = await jwtVerifier.verifyToken(msg.token);
             authenticated = true;
             userId = payload.sub;
             sendSocketMessage(socket, { type: 'AUTH_OK' });
