@@ -71,6 +71,27 @@ export interface WrappedKeyMaterialRecordInternal {
   updatedAt: Date;
 }
 
+export interface PasskeyCredentialRecord {
+  id: string;
+  userId: string;
+  credentialId: string;
+  publicKeyJwk: JsonWebKey;
+  signCount: number;
+  transports: string[];
+  createdAt: Date;
+  lastUsedAt: Date | null;
+}
+
+export interface WebAuthnChallengeRecord {
+  id: string;
+  userId: string;
+  emailNormalized: string;
+  type: 'passkey-register' | 'passkey-login';
+  challenge: string;
+  expiresAt: Date;
+  usedAt: Date | null;
+}
+
 export interface AuditEventRecord {
   id: string;
   userId: string | null;
@@ -83,7 +104,40 @@ export interface AuditEventRecord {
   metadataRedacted: Record<string, unknown>;
 }
 
-export class MemoryAccountRepository {
+export interface AccountRepository {
+  createUser(user: AccountUserRecord, credential: AuthCredentialRecord): void;
+  getUserByEmail(emailNormalized: string): AccountUserRecord | null;
+  getUserById(userId: string): AccountUserRecord | null;
+  updateUser(user: AccountUserRecord): void;
+  getCredential(userId: string): AuthCredentialRecord | null;
+  updateCredential(credential: AuthCredentialRecord): void;
+  createSession(session: UserSessionRecord): void;
+  getSession(sessionId: string): UserSessionRecord | null;
+  updateSession(session: UserSessionRecord): void;
+  listSessionsForUser(userId: string): UserSessionRecord[];
+  revokeSession(sessionId: string, reason: string, now: Date): UserSessionRecord | null;
+  revokeSessionFamily(familyId: string, reason: string, now: Date): void;
+  revokeAllSessionsForUser(userId: string, reason: string, now: Date): void;
+  storeEmailVerificationToken(record: EmailVerificationTokenRecord): void;
+  consumeEmailVerificationToken(emailNormalized: string, tokenHash: string, now: Date): EmailVerificationTokenRecord | null;
+  storePasswordResetToken(record: PasswordResetTokenRecord): void;
+  consumePasswordResetToken(emailNormalized: string, tokenHash: string, now: Date): PasswordResetTokenRecord | null;
+  upsertTotpFactor(record: TotpFactorRecord): void;
+  getTotpFactor(userId: string): TotpFactorRecord | null;
+  upsertWrappedKeyMaterial(record: WrappedKeyMaterialRecordInternal): void;
+  getWrappedKeyMaterial(userId: string): WrappedKeyMaterialRecordInternal | null;
+  createPasskeyCredential(record: PasskeyCredentialRecord): void;
+  getPasskeyCredentialByCredentialId(credentialId: string): PasskeyCredentialRecord | null;
+  listPasskeyCredentialsForUser(userId: string): PasskeyCredentialRecord[];
+  updatePasskeyCredential(record: PasskeyCredentialRecord): void;
+  storeWebAuthnChallenge(record: WebAuthnChallengeRecord): void;
+  consumeWebAuthnChallenge(userId: string, type: WebAuthnChallengeRecord['type'], challenge: string, now: Date): WebAuthnChallengeRecord | null;
+  appendAuditEvent(event: AuditEventRecord): void;
+  listAuditEvents(): AuditEventRecord[];
+  close?(): void;
+}
+
+export class MemoryAccountRepository implements AccountRepository {
   private readonly users = new Map<string, AccountUserRecord>();
   private readonly userIdsByEmail = new Map<string, string>();
   private readonly credentials = new Map<string, AuthCredentialRecord>();
@@ -92,6 +146,9 @@ export class MemoryAccountRepository {
   private readonly passwordResetTokens = new Map<string, PasswordResetTokenRecord>();
   private readonly totpFactors = new Map<string, TotpFactorRecord>();
   private readonly wrappedKeyMaterial = new Map<string, WrappedKeyMaterialRecordInternal>();
+  private readonly passkeyCredentials = new Map<string, PasskeyCredentialRecord>();
+  private readonly passkeyCredentialIds = new Map<string, string>();
+  private readonly webAuthnChallenges = new Map<string, WebAuthnChallengeRecord>();
   private readonly auditEvents: AuditEventRecord[] = [];
 
   createUser(user: AccountUserRecord, credential: AuthCredentialRecord): void {
@@ -234,6 +291,52 @@ export class MemoryAccountRepository {
 
   getWrappedKeyMaterial(userId: string): WrappedKeyMaterialRecordInternal | null {
     return this.wrappedKeyMaterial.get(userId) ?? null;
+  }
+
+  createPasskeyCredential(record: PasskeyCredentialRecord): void {
+    this.passkeyCredentials.set(record.id, record);
+    this.passkeyCredentialIds.set(record.credentialId, record.id);
+  }
+
+  getPasskeyCredentialByCredentialId(credentialId: string): PasskeyCredentialRecord | null {
+    const recordId = this.passkeyCredentialIds.get(credentialId);
+    return recordId ? this.passkeyCredentials.get(recordId) ?? null : null;
+  }
+
+  listPasskeyCredentialsForUser(userId: string): PasskeyCredentialRecord[] {
+    return Array.from(this.passkeyCredentials.values()).filter((record) => record.userId === userId);
+  }
+
+  updatePasskeyCredential(record: PasskeyCredentialRecord): void {
+    this.passkeyCredentials.set(record.id, record);
+    this.passkeyCredentialIds.set(record.credentialId, record.id);
+  }
+
+  storeWebAuthnChallenge(record: WebAuthnChallengeRecord): void {
+    this.webAuthnChallenges.set(record.id, record);
+  }
+
+  consumeWebAuthnChallenge(
+    userId: string,
+    type: WebAuthnChallengeRecord['type'],
+    challenge: string,
+    now: Date,
+  ): WebAuthnChallengeRecord | null {
+    for (const record of this.webAuthnChallenges.values()) {
+      if (
+        record.userId === userId &&
+        record.type === type &&
+        record.challenge === challenge &&
+        !record.usedAt &&
+        record.expiresAt > now
+      ) {
+        record.usedAt = now;
+        this.webAuthnChallenges.set(record.id, record);
+        return record;
+      }
+    }
+
+    return null;
   }
 
   appendAuditEvent(event: AuditEventRecord): void {

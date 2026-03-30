@@ -118,6 +118,76 @@ export interface TotpVerifyResponse {
   recoveryCodes: string[];
 }
 
+export interface PasskeyDescriptor {
+  id: string;
+  type: 'public-key';
+}
+
+export interface PasskeyRegisterStartResponse {
+  challenge: string;
+  rp: {
+    id: string;
+    name: string;
+  };
+  user: {
+    id: string;
+    name: string;
+    displayName: string;
+  };
+  pubKeyCredParams: Array<{
+    alg: number;
+    type: 'public-key';
+  }>;
+  timeout: number;
+  attestation: 'none';
+  authenticatorSelection: {
+    residentKey: 'preferred';
+    userVerification: 'required';
+  };
+  excludeCredentials: PasskeyDescriptor[];
+}
+
+export interface PasskeyRegisterFinishRequest {
+  credential: {
+    id: string;
+    rawId: string;
+    type: 'public-key';
+    response: {
+      clientDataJSON: string;
+      attestationObject: string;
+      transports?: string[];
+    };
+  };
+}
+
+export interface PasskeyLoginStartRequest {
+  email: string;
+}
+
+export interface PasskeyLoginStartResponse {
+  challenge: string;
+  rpId: string;
+  timeout: number;
+  userVerification: 'required';
+  allowCredentials: PasskeyDescriptor[];
+}
+
+export interface PasskeyLoginFinishRequest {
+  email: string;
+  deviceName?: string;
+  credential: {
+    id: string;
+    rawId: string;
+    type: 'public-key';
+    response: {
+      clientDataJSON: string;
+      authenticatorData: string;
+      signature: string;
+      userHandle?: string | null;
+    };
+  };
+}
+
 export interface ApiErrorResponse {
   error: string;
 }

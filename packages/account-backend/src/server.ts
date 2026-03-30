@@ -1,3 +1,4 @@
+import { join, resolve } from 'node:path';
 import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyRateLimit from '@fastify/rate-limit';
 import type {
@@ -5,6 +6,9 @@ import type {
   BootstrapKeysRequest,
   ForgotPasswordRequest,
   LoginRequest,
+  PasskeyLoginFinishRequest,
+  PasskeyLoginStartRequest,
+  PasskeyRegisterFinishRequest,
   RecoveryImportRequest,
   RegisterRequest,
   TotpVerifyRequest,
@@ -18,6 +22,7 @@ import {
   type AccountServiceConfig,
   type RequestContext,
 } from './account-service.js';
+import { SQLiteAccountRepository } from './sqlite-repository.js';
 
 const FASTIFY_BODY_LIMIT_BYTES = 128 * 1024;
 const DEFAULT_COOKIE_NAME = 'refresh_token';
@@ -28,6 +33,7 @@ export interface AccountServerConfig extends AccountServiceConfig {
   allowedOrigins?: string[];
   refreshCookieName?: string;
   secureCookies?: boolean;
+  dbPath?: string;
 }
 
 export interface AccountServerContext {
@@ -280,6 +286,83 @@ function parseTotpVerifyRequest(value: unknown): TotpVerifyRequest {
   return { code: record.code };
 }
 
+function parsePasskeyRegisterFinishRequest(value: unknown): PasskeyRegisterFinishRequest {
+  const record = expectRecord(value);
+  const credential = expectRecord(record.credential);
+  const response = expectRecord(credential.response);
+  if (
+    typeof credential.id !== 'string' ||
+    typeof credential.rawId !== 'string' ||
+    credential.type !== 'public-key' ||
+    typeof response.clientDataJSON !== 'string' ||
+    typeof response.attestationObject !== 'string'
+  ) {
+    throw new RequestError(400, 'Invalid passkey registration payload');
+  }
+
+  return {
+    credential: {
+      id: credential.id,
+      rawId: credential.rawId,
+      type: 'public-key',
+      response: {
+        clientDataJSON: response.clientDataJSON,
+        attestationObject: response.attestationObject,
+        ...(Array.isArray(response.transports)
+          ? {
+              transports: response.transports.filter(
+                (item): item is string => typeof item === 'string',
+              ),
+            }
+          : {}),
+      },
+    },
+  };
+}
+
+function parsePasskeyLoginStartRequest(value: unknown): PasskeyLoginStartRequest {
+  const record = expectRecord(value);
+  if (typeof record.email !== 'string') {
+    throw new RequestError(400, 'Invalid passkey login request');
+  }
+  return { email: record.email };
+}
+
+function parsePasskeyLoginFinishRequest(value: unknown): PasskeyLoginFinishRequest {
+  const record = expectRecord(value);
+  const credential = expectRecord(record.credential);
+  const response = expectRecord(credential.response);
+  if (
+    typeof record.email !== 'string' ||
+    typeof credential.id !== 'string' ||
+    typeof credential.rawId !== 'string' ||
+    credential.type !== 'public-key' ||
+    typeof response.clientDataJSON !== 'string' ||
+    typeof response.authenticatorData !== 'string' ||
+    typeof response.signature !== 'string'
+  ) {
+    throw new RequestError(400, 'Invalid passkey assertion payload');
+  }
+
+  return {
+    email: record.email,
+    ...(typeof record.deviceName === 'string' ? { deviceName: record.deviceName } : {}),
+    credential: {
+      id: credential.id,
+      rawId: credential.rawId,
+      type: 'public-key',
+      response: {
+        clientDataJSON: response.clientDataJSON,
+        authenticatorData: response.authenticatorData,
+        signature: response.signature,
+        ...(typeof response.userHandle === 'string' || response.userHandle === null
+          ? { userHandle: response.userHandle as string | null }
+          : {}),
+      },
+    },
+  };
+}
+
 export async function createAccountServer(
   config: AccountServerConfig,
 ): Promise<AccountServerContext> {
@@ -291,10 +374,17 @@ export async function createAccountServer(
     },
   });
 
-  const accountService = await createAccountService(config);
+  const repository = new SQLiteAccountRepository(
+    resolve(config.dbPath ?? join(process.cwd(), 'var', 'account-backend.sqlite')),
+  );
+  const accountService = await createAccountService(config, repository);
   const cookieName = config.refreshCookieName ?? DEFAULT_COOKIE_NAME;
   const secureCookies = config.secureCookies ?? true;
   const refreshMaxAgeSeconds = Math.floor((config.refreshTokenTtlMs ?? 30 * 24 * 60 * 60 * 1000) / 1000);
+
+  server.addHook('onClose', async () => {
+    repository.close();
+  });
 
   await server.register(fastifyRateLimit, {
     max: 60,
@@ -487,16 +577,63 @@ export async function createAccountServer(
     }
   });
 
-  for (const path of [
-    '/auth/passkeys/register/start',
-    '/auth/passkeys/register/finish',
-    '/auth/passkeys/login/start',
-    '/auth/passkeys/login/finish',
-  ]) {
-    server.post(path, async (_request, reply) => {
-      return reply.code(501).send({ error: 'Passkeys are not yet implemented in this monorepo' });
-    });
-  }
+  server.post('/auth/passkeys/register/start', async (request, reply) => {
+    try {
+      const auth = await authenticateRequest(request);
+      return reply.send(await accountService.startPasskeyRegistration(auth.userId));
+    } catch (error) {
+      const mapped = asErrorResponse(error);
+      return reply.code(mapped.statusCode).send(mapped.body);
+    }
+  });
+
+  server.post('/auth/passkeys/register/finish', async (request, reply) => {
+    try {
+      const auth = await authenticateRequest(request);
+      return reply.send(
+        await accountService.finishPasskeyRegistration(
+          auth.userId,
+          parsePasskeyRegisterFinishRequest(request.body).credential,
+          getRequestContext(request),
+        ),
+      );
+    } catch (error) {
+      const mapped = asErrorResponse(error);
+      return reply.code(mapped.statusCode).send(mapped.body);
+    }
+  });
+
+  server.post('/auth/passkeys/login/start', async (request, reply) => {
+    try {
+      const body = parsePasskeyLoginStartRequest(request.body);
+      return reply.send(await accountService.startPasskeyLogin(body.email));
+    } catch (error) {
+      const mapped = asErrorResponse(error);
+      return reply.code(mapped.statusCode).send(mapped.body);
+    }
+  });
+
+  server.post('/auth/passkeys/login/finish', async (request, reply) => {
+    try {
+      const result = await accountService.finishPasskeyLogin(
+        parsePasskeyLoginFinishRequest(request.body),
+        getRequestContext(request),
+      );
+      reply.header(
+        'Set-Cookie',
+        serializeCookie(cookieName, result.refreshToken, refreshMaxAgeSeconds, secureCookies),
+      );
+      return reply.send({
+        accessToken: result.accessToken,
+        expiresInSeconds: result.expiresInSeconds,
+        sessionId: result.sessionId,
+        user: result.user,
+      });
+    } catch (error) {
+      const mapped = asErrorResponse(error);
+      return reply.code(mapped.statusCode).send(mapped.body);
+    }
+  });
 
   server.get('/me', async (request, reply) => {
     try {

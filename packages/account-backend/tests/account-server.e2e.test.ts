@@ -1,7 +1,21 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { randomBytes } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
+import type {
+  PasskeyLoginFinishRequest,
+  PasskeyRegisterFinishRequest,
+} from '@editor-narrativo/account-shared';
 import { createAccountServer } from '../src/server.js';
 import { generateTotpCode } from '../src/totp.js';
+import {
+  base64urlDecode,
+  base64urlEncode,
+  encodeCbor,
+  sha256,
+} from '../src/webauthn.js';
 import { createServer as createProxyServer } from '../../proxy-backend/src/server.js';
 import type { LLMProvider, LLMMessage, LLMStreamCallbacks } from '../../proxy-backend/src/llm-provider.js';
 
@@ -21,6 +35,166 @@ class ImmediateProvider implements LLMProvider {
       callbacks.onComplete('{"hasConflict":false,"conflicts":[],"evidence_chains":[]}');
     });
     return controller;
+  }
+}
+
+function concatBytes(parts: Uint8Array[]): Uint8Array {
+  const totalLength = parts.reduce((sum, part) => sum + part.length, 0);
+  const result = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const part of parts) {
+    result.set(part, offset);
+    offset += part.length;
+  }
+  return result;
+}
+
+function uint16be(value: number): Uint8Array {
+  return Uint8Array.of((value >>> 8) & 0xff, value & 0xff);
+}
+
+function uint32be(value: number): Uint8Array {
+  return Uint8Array.of(
+    (value >>> 24) & 0xff,
+    (value >>> 16) & 0xff,
+    (value >>> 8) & 0xff,
+    value & 0xff,
+  );
+}
+
+class VirtualPasskeyAuthenticator {
+  private readonly privateKey: CryptoKey;
+  private readonly x: Uint8Array;
+  private readonly y: Uint8Array;
+  private readonly credentialId: Uint8Array;
+  private signCount = 0;
+
+  private constructor(
+    privateKey: CryptoKey,
+    x: Uint8Array,
+    y: Uint8Array,
+    credentialId: Uint8Array,
+  ) {
+    this.privateKey = privateKey;
+    this.x = x;
+    this.y = y;
+    this.credentialId = credentialId;
+  }
+
+  static async create(): Promise<VirtualPasskeyAuthenticator> {
+    const keyPair = await crypto.subtle.generateKey(
+      { name: 'ECDSA', namedCurve: 'P-256' },
+      true,
+      ['sign', 'verify'],
+    );
+    const publicJwk = await crypto.subtle.exportKey('jwk', keyPair.publicKey);
+    return new VirtualPasskeyAuthenticator(
+      keyPair.privateKey,
+      base64urlDecode(publicJwk.x!),
+      base64urlDecode(publicJwk.y!),
+      randomBytes(32),
+    );
+  }
+
+  private rpIdHash(rpId: string): Uint8Array {
+    return sha256(new TextEncoder().encode(rpId));
+  }
+
+  private cosePublicKey(): Uint8Array {
+    return encodeCbor(
+      new Map([
+        [1, 2],
+        [3, -7],
+        [-1, 1],
+        [-2, this.x],
+        [-3, this.y],
+      ]),
+    );
+  }
+
+  registrationCredential(
+    challenge: string,
+    origin: string,
+    rpId: string,
+  ): PasskeyRegisterFinishRequest['credential'] {
+    const clientDataJSON = new TextEncoder().encode(
+      JSON.stringify({
+        type: 'webauthn.create',
+        challenge,
+        origin,
+        crossOrigin: false,
+      }),
+    );
+
+    const authData = concatBytes([
+      this.rpIdHash(rpId),
+      Uint8Array.of(0x45),
+      uint32be(this.signCount),
+      new Uint8Array(16),
+      uint16be(this.credentialId.length),
+      this.credentialId,
+      this.cosePublicKey(),
+    ]);
+    const attestationObject = encodeCbor(
+      new Map([
+        ['fmt', 'none'],
+        ['authData', authData],
+        ['attStmt', new Map()],
+      ]),
+    );
+
+    const credentialId = base64urlEncode(this.credentialId);
+    return {
+      id: credentialId,
+      rawId: credentialId,
+      type: 'public-key',
+      response: {
+        clientDataJSON: base64urlEncode(clientDataJSON),
+        attestationObject: base64urlEncode(attestationObject),
+        transports: ['internal'],
+      },
+    };
+  }
+
+  async authenticationCredential(
+    challenge: string,
+    origin: string,
+    rpId: string,
+  ): Promise<PasskeyLoginFinishRequest['credential']> {
+    this.signCount += 1;
+    const clientDataJSON = new TextEncoder().encode(
+      JSON.stringify({
+        type: 'webauthn.get',
+        challenge,
+        origin,
+        crossOrigin: false,
+      }),
+    );
+    const authenticatorData = concatBytes([
+      this.rpIdHash(rpId),
+      Uint8Array.of(0x05),
+      uint32be(this.signCount),
+    ]);
+    const payload = concatBytes([authenticatorData, sha256(clientDataJSON)]);
+    const signature = new Uint8Array(
+      await crypto.subtle.sign(
+        { name: 'ECDSA', hash: 'SHA-256' },
+        this.privateKey,
+        payload,
+      ),
+    );
+    const credentialId = base64urlEncode(this.credentialId);
+    return {
+      id: credentialId,
+      rawId: credentialId,
+      type: 'public-key',
+      response: {
+        clientDataJSON: base64urlEncode(clientDataJSON),
+        authenticatorData: base64urlEncode(authenticatorData),
+        signature: base64urlEncode(signature),
+        userHandle: null,
+      },
+    };
   }
 }
 
@@ -66,15 +240,21 @@ function cookieValue(setCookie: string | null): string | null {
 describe('account-backend E2E', () => {
   let accountServer: FastifyInstance;
   let baseUrl: string;
+  let dbPath: string;
+  let tempDir: string;
 
-  beforeEach(async () => {
+  async function startAccountServer(): Promise<void> {
     const context = await createAccountServer({
       port: 0,
       host: '127.0.0.1',
+      dbPath,
       issuer: 'https://accounts.editor.test',
       audience: 'editor-narrativo',
       exposeInternalTokens: true,
       secureCookies: false,
+      rpId: '127.0.0.1',
+      rpOrigin: 'http://127.0.0.1',
+      rpName: 'Editor Narrativo Test',
     });
     accountServer = context.server;
     await accountServer.listen({ port: 0, host: '127.0.0.1' });
@@ -85,10 +265,22 @@ describe('account-backend E2E', () => {
     }
 
     baseUrl = `http://127.0.0.1:${address.port}`;
+  }
+
+  async function restartAccountServer(): Promise<void> {
+    await accountServer.close();
+    await startAccountServer();
+  }
+
+  beforeEach(async () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'editor-narrativo-account-'));
+    dbPath = join(tempDir, 'account.sqlite');
+    await startAccountServer();
   });
 
   afterEach(async () => {
     await accountServer.close();
+    rmSync(tempDir, { recursive: true, force: true });
   });
 
   it('registers, verifies, logs in, rotates refresh tokens and manages key material', async () => {
@@ -348,6 +540,139 @@ describe('account-backend E2E', () => {
       },
     });
     expect(newPasswordLogin.status).toBe(200);
+  });
+
+  it('persists accounts in SQLite and supports passkey login across server restarts', async () => {
+    const authenticator = await VirtualPasskeyAuthenticator.create();
+
+    const register = await requestJson<{ verificationToken: string }>(baseUrl, '/auth/register', {
+      method: 'POST',
+      body: {
+        email: 'passkey@example.com',
+        password: 'very-secure-password',
+        displayName: 'Passkey User',
+      },
+    });
+    await requestJson(baseUrl, '/auth/verify-email', {
+      method: 'POST',
+      body: {
+        email: 'passkey@example.com',
+        token: register.body.verificationToken,
+      },
+    });
+
+    const login = await requestJson<{ accessToken: string }>(baseUrl, '/auth/login', {
+      method: 'POST',
+      body: {
+        email: 'passkey@example.com',
+        password: 'very-secure-password',
+      },
+    });
+    expect(login.status).toBe(200);
+
+    await requestJson(baseUrl, '/me/keys/bootstrap', {
+      method: 'POST',
+      token: login.body.accessToken,
+      body: {
+        wrappedDek: 'wrapped-dek-passkey',
+        argon2Salt: 'salt-passkey',
+        wrappedSigningSecretKey: 'wrapped-signing-secret-passkey',
+        signingPublicKey: 'signing-public-passkey',
+        kekVersion: 2,
+        recoveryKit: 'recovery-kit-passkey',
+      },
+    });
+
+    const registrationStart = await requestJson<{ challenge: string; rp: { id: string } }>(
+      baseUrl,
+      '/auth/passkeys/register/start',
+      {
+        method: 'POST',
+        token: login.body.accessToken,
+      },
+    );
+    expect(registrationStart.status).toBe(200);
+
+    const registrationFinish = await requestJson<{ registered: boolean }>(
+      baseUrl,
+      '/auth/passkeys/register/finish',
+      {
+        method: 'POST',
+        token: login.body.accessToken,
+        body: {
+          credential: authenticator.registrationCredential(
+            registrationStart.body.challenge,
+            'http://127.0.0.1',
+            registrationStart.body.rp.id,
+          ),
+        },
+      },
+    );
+    expect(registrationFinish.status).toBe(200);
+    expect(registrationFinish.body.registered).toBe(true);
+
+    await restartAccountServer();
+
+    const passkeyLoginStart = await requestJson<{ challenge: string; rpId: string }>(
+      baseUrl,
+      '/auth/passkeys/login/start',
+      {
+        method: 'POST',
+        body: { email: 'passkey@example.com' },
+      },
+    );
+    expect(passkeyLoginStart.status).toBe(200);
+
+    const passkeyLogin = await requestJson<{ accessToken: string; user: { email: string } }>(
+      baseUrl,
+      '/auth/passkeys/login/finish',
+      {
+        method: 'POST',
+        body: {
+          email: 'passkey@example.com',
+          deviceName: 'Passkey Browser',
+          credential: await authenticator.authenticationCredential(
+            passkeyLoginStart.body.challenge,
+            'http://127.0.0.1',
+            passkeyLoginStart.body.rpId,
+          ),
+        },
+      },
+    );
+    expect(passkeyLogin.status).toBe(200);
+    expect(passkeyLogin.body.user.email).toBe('passkey@example.com');
+    expect(cookieValue(passkeyLogin.setCookie)).toBeTruthy();
+
+    const material = await requestJson<{ recoveryKit: string }>(baseUrl, '/me/keys/material', {
+      token: passkeyLogin.body.accessToken,
+    });
+    expect(material.status).toBe(200);
+    expect(material.body.recoveryKit).toBe('recovery-kit-passkey');
+
+    const secondLoginStart = await requestJson<{ challenge: string; rpId: string }>(
+      baseUrl,
+      '/auth/passkeys/login/start',
+      {
+        method: 'POST',
+        body: { email: 'passkey@example.com' },
+      },
+    );
+    const secondLogin = await requestJson<{ accessToken: string }>(
+      baseUrl,
+      '/auth/passkeys/login/finish',
+      {
+        method: 'POST',
+        body: {
+          email: 'passkey@example.com',
+          credential: await authenticator.authenticationCredential(
+            secondLoginStart.body.challenge,
+            'http://127.0.0.1',
+            secondLoginStart.body.rpId,
+          ),
+        },
+      },
+    );
+    expect(secondLogin.status).toBe(200);
   });
 
   it('issues tokens that the proxy-backend can verify through JWKS', async () => {

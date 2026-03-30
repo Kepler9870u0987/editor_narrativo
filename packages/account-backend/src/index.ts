@@ -23,13 +23,30 @@ export {
   type AccessTokenServiceConfig,
 } from './token-service.js';
 export {
+  SQLiteAccountRepository,
+} from './sqlite-repository.js';
+export {
   MemoryAccountRepository,
+  type AccountRepository,
   type AccountUserRecord,
   type AuthCredentialRecord,
   type UserSessionRecord,
   type EmailVerificationTokenRecord,
   type PasswordResetTokenRecord,
+  type PasskeyCredentialRecord,
+  type WebAuthnChallengeRecord,
   type TotpFactorRecord,
   type WrappedKeyMaterialRecordInternal,
   type AuditEventRecord,
 } from './repository.js';
+export {
+  base64urlDecode,
+  base64urlEncode,
+  decodeCbor,
+  encodeCbor,
+  generateWebAuthnChallenge,
+  sha256,
+  utf8ToBase64url,
+  verifyAuthenticationResponse,
+  verifyRegistrationResponse,
+} from './webauthn.js';

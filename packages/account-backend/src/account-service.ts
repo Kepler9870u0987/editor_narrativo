@@ -5,6 +5,10 @@ import type {
   AuthSuccessResponse,
   BootstrapKeysRequest,
   ForgotPasswordResponse,
+  PasskeyLoginFinishRequest,
+  PasskeyLoginStartResponse,
+  PasskeyRegisterFinishRequest,
+  PasskeyRegisterStartResponse,
   RecoveryExportResponse,
   RegisterRequest,
   RegisterResponse,
@@ -23,9 +27,19 @@ import {
 } from './totp.js';
 import { hashPassword, verifyPassword } from './password-hasher.js';
 import {
+  generateWebAuthnChallenge,
+  utf8ToBase64url,
+  verifyAuthenticationResponse,
+  verifyRegistrationResponse,
+  type AuthenticationCredentialInput,
+  type RegistrationCredentialInput,
+} from './webauthn.js';
+import {
+  type AccountRepository,
   MemoryAccountRepository,
   type AccountUserRecord,
   type AuditEventRecord,
+  type PasskeyCredentialRecord,
   type TotpFactorRecord,
   type UserSessionRecord,
   type WrappedKeyMaterialRecordInternal,
@@ -39,6 +53,7 @@ const EMAIL_VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000;
 const PASSWORD_RESET_TTL_MS = 30 * 60 * 1000;
 const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const ACCESS_TOKEN_TTL_SECONDS = 15 * 60;
+const PASSKEY_CHALLENGE_TTL_MS = 5 * 60 * 1000;
 const MIN_PASSWORD_LENGTH = 12;
 
 export interface RequestContext {
@@ -73,6 +88,10 @@ export interface AccountServiceConfig {
   passwordPepper?: string;
   exposeInternalTokens?: boolean;
   totpIssuer?: string;
+  rpId?: string;
+  rpOrigin?: string;
+  rpName?: string;
+  passkeyChallengeTtlMs?: number;
 }
 
 export interface AuthenticatedRequest {
@@ -102,6 +121,17 @@ export interface AccountService {
   importRecoveryKit(userId: string, input: BootstrapKeysRequest): Promise<WrappedKeyMaterialRecord>;
   setupTotp(userId: string): Promise<TotpSetupResponse>;
   verifyTotpSetup(userId: string, code: string): Promise<TotpVerifyResponse>;
+  startPasskeyRegistration(userId: string): Promise<PasskeyRegisterStartResponse>;
+  finishPasskeyRegistration(
+    userId: string,
+    credential: PasskeyRegisterFinishRequest['credential'],
+    context: RequestContext,
+  ): Promise<{ registered: true }>;
+  startPasskeyLogin(email: string): Promise<PasskeyLoginStartResponse>;
+  finishPasskeyLogin(
+    input: PasskeyLoginFinishRequest,
+    context: RequestContext,
+  ): Promise<LoginResult>;
 }
 
 class ServiceError extends Error {
@@ -226,7 +256,7 @@ export function isServiceError(error: unknown): error is ServiceError {
 
 export async function createAccountService(
   config: AccountServiceConfig,
-  repository = new MemoryAccountRepository(),
+  repository: AccountRepository = new MemoryAccountRepository(),
 ): Promise<AccountService> {
   const accessTokenService = await createAccessTokenService({
     issuer: config.issuer,
@@ -240,6 +270,10 @@ export async function createAccountService(
     config.emailVerificationTtlMs ?? EMAIL_VERIFICATION_TTL_MS;
   const passwordResetTtlMs = config.passwordResetTtlMs ?? PASSWORD_RESET_TTL_MS;
   const refreshTokenTtlMs = config.refreshTokenTtlMs ?? REFRESH_TOKEN_TTL_MS;
+  const passkeyChallengeTtlMs = config.passkeyChallengeTtlMs ?? PASSKEY_CHALLENGE_TTL_MS;
+  const rpOrigin = config.rpOrigin ?? config.issuer;
+  const rpId = config.rpId ?? new URL(rpOrigin).hostname;
+  const rpName = config.rpName ?? 'Editor Narrativo';
 
   function appendAuditEvent(
     eventType: string,
@@ -290,6 +324,14 @@ export async function createAccountService(
     return user;
   }
 
+  async function requireActiveUser(userId: string): Promise<AccountUserRecord> {
+    const user = await requireUser(userId);
+    if (user.status !== 'active') {
+      throw new ServiceError(403, 'inactive_user', 'User is not active');
+    }
+    return user;
+  }
+
   async function authenticate(token: string): Promise<{
     payload: AccessTokenPayload;
     user: AccountUserRecord;
@@ -334,6 +376,32 @@ export async function createAccountService(
 
     repository.upsertWrappedKeyMaterial(record);
     return mapKeyMaterial(record);
+  }
+
+  function createSessionForUser(
+    user: AccountUserRecord,
+    context: RequestContext,
+    deviceName?: string,
+  ): { session: UserSessionRecord; refreshToken: string; now: Date } {
+    const now = new Date();
+    const sessionId = crypto.randomUUID();
+    const refreshToken = buildRefreshToken(sessionId);
+    const session: UserSessionRecord = {
+      id: sessionId,
+      userId: user.id,
+      refreshTokenFamilyId: crypto.randomUUID(),
+      refreshTokenHash: hashOpaqueToken(refreshToken),
+      deviceName: deviceName?.trim() || context.deviceName || null,
+      userAgent: context.userAgent,
+      ipCreated: context.ip,
+      ipLastSeen: context.ip,
+      createdAt: now,
+      lastSeenAt: now,
+      expiresAt: new Date(now.getTime() + refreshTokenTtlMs),
+      revokedAt: null,
+      revocationReason: null,
+    };
+    return { session, refreshToken, now };
   }
 
   return {
@@ -472,24 +540,7 @@ export async function createAccountService(
         }
       }
 
-      const now = new Date();
-      const sessionId = crypto.randomUUID();
-      const refreshToken = buildRefreshToken(sessionId);
-      const session: UserSessionRecord = {
-        id: sessionId,
-        userId: user.id,
-        refreshTokenFamilyId: crypto.randomUUID(),
-        refreshTokenHash: hashOpaqueToken(refreshToken),
-        deviceName: input.deviceName?.trim() || context.deviceName || null,
-        userAgent: context.userAgent,
-        ipCreated: context.ip,
-        ipLastSeen: context.ip,
-        createdAt: now,
-        lastSeenAt: now,
-        expiresAt: new Date(now.getTime() + refreshTokenTtlMs),
-        revokedAt: null,
-        revocationReason: null,
-      };
+      const { session, refreshToken, now } = createSessionForUser(user, context, input.deviceName);
       repository.createSession(session);
 
       credential.lastUsedAt = now;
@@ -715,6 +766,224 @@ export async function createAccountService(
       input: BootstrapKeysRequest,
     ): Promise<WrappedKeyMaterialRecord> {
       return persistKeyMaterial(userId, input);
+    },
+
+    async startPasskeyRegistration(userId: string): Promise<PasskeyRegisterStartResponse> {
+      const user = await requireActiveUser(userId);
+      const challenge = generateWebAuthnChallenge();
+      repository.storeWebAuthnChallenge({
+        id: crypto.randomUUID(),
+        userId: user.id,
+        emailNormalized: user.emailNormalized,
+        type: 'passkey-register',
+        challenge,
+        expiresAt: new Date(Date.now() + passkeyChallengeTtlMs),
+        usedAt: null,
+      });
+
+      const excludeCredentials = repository
+        .listPasskeyCredentialsForUser(user.id)
+        .map((record) => ({ id: record.credentialId, type: 'public-key' as const }));
+
+      return {
+        challenge,
+        rp: {
+          id: rpId,
+          name: rpName,
+        },
+        user: {
+          id: utf8ToBase64url(user.id),
+          name: user.emailNormalized,
+          displayName: user.displayName ?? user.emailNormalized,
+        },
+        pubKeyCredParams: [{ alg: -7, type: 'public-key' }],
+        timeout: passkeyChallengeTtlMs,
+        attestation: 'none',
+        authenticatorSelection: {
+          residentKey: 'preferred',
+          userVerification: 'required',
+        },
+        excludeCredentials,
+      };
+    },
+
+    async finishPasskeyRegistration(
+      userId: string,
+      credential: RegistrationCredentialInput,
+      context: RequestContext,
+    ): Promise<{ registered: true }> {
+      const user = await requireActiveUser(userId);
+      const clientData = JSON.parse(
+        Buffer.from(credential.response.clientDataJSON, 'base64url').toString('utf8'),
+      ) as { challenge?: string };
+      const challenge = typeof clientData.challenge === 'string' ? clientData.challenge : '';
+      const verified = verifyRegistrationResponse({
+        credential,
+        challenge,
+        rpId,
+        origin: rpOrigin,
+      });
+      const challengeRecord = repository.consumeWebAuthnChallenge(
+        user.id,
+        'passkey-register',
+        challenge,
+        new Date(),
+      );
+      if (!challengeRecord) {
+        throw new ServiceError(400, 'invalid_passkey_challenge', 'Invalid passkey challenge');
+      }
+      if (repository.getPasskeyCredentialByCredentialId(verified.credentialId)) {
+        throw new ServiceError(409, 'passkey_exists', 'Passkey already registered');
+      }
+
+      const record: PasskeyCredentialRecord = {
+        id: crypto.randomUUID(),
+        userId: user.id,
+        credentialId: verified.credentialId,
+        publicKeyJwk: verified.publicKeyJwk,
+        signCount: verified.signCount,
+        transports: verified.transports,
+        createdAt: new Date(),
+        lastUsedAt: null,
+      };
+      repository.createPasskeyCredential(record);
+
+      appendAuditEvent(
+        'passkey_register_success',
+        context,
+        { credentialId: record.credentialId },
+        user.id,
+      );
+
+      return { registered: true };
+    },
+
+    async startPasskeyLogin(email: string): Promise<PasskeyLoginStartResponse> {
+      const emailNormalized = normalizeEmail(email);
+      validateEmail(emailNormalized);
+      const user = repository.getUserByEmail(emailNormalized);
+      if (!user || user.status !== 'active') {
+        throw new ServiceError(404, 'user_not_found', 'User not found');
+      }
+
+      const credentials = repository.listPasskeyCredentialsForUser(user.id);
+      if (credentials.length === 0) {
+        throw new ServiceError(400, 'passkey_not_registered', 'No passkeys registered');
+      }
+
+      const challenge = generateWebAuthnChallenge();
+      repository.storeWebAuthnChallenge({
+        id: crypto.randomUUID(),
+        userId: user.id,
+        emailNormalized,
+        type: 'passkey-login',
+        challenge,
+        expiresAt: new Date(Date.now() + passkeyChallengeTtlMs),
+        usedAt: null,
+      });
+
+      return {
+        challenge,
+        rpId,
+        timeout: passkeyChallengeTtlMs,
+        userVerification: 'required',
+        allowCredentials: credentials.map((record) => ({
+          id: record.credentialId,
+          type: 'public-key' as const,
+        })),
+      };
+    },
+
+    async finishPasskeyLogin(
+      input: PasskeyLoginFinishRequest,
+      context: RequestContext,
+    ): Promise<LoginResult> {
+      const emailNormalized = normalizeEmail(input.email);
+      validateEmail(emailNormalized);
+
+      const credentialRecord = repository.getPasskeyCredentialByCredentialId(input.credential.id);
+      if (!credentialRecord) {
+        appendAuditEvent(
+          'passkey_login_failed',
+          context,
+          { email: emailNormalized, reason: 'credential_missing' },
+          null,
+          null,
+          75,
+        );
+        throw new ServiceError(401, 'invalid_passkey', 'Invalid passkey assertion');
+      }
+
+      const user = await requireActiveUser(credentialRecord.userId);
+      if (user.emailNormalized !== emailNormalized) {
+        throw new ServiceError(401, 'invalid_passkey', 'Invalid passkey assertion');
+      }
+
+      const clientData = JSON.parse(
+        Buffer.from(input.credential.response.clientDataJSON, 'base64url').toString('utf8'),
+      ) as { challenge?: string };
+      const challenge = typeof clientData.challenge === 'string' ? clientData.challenge : '';
+
+      try {
+        const verified = await verifyAuthenticationResponse({
+          credential: input.credential as AuthenticationCredentialInput,
+          challenge,
+          rpId,
+          origin: rpOrigin,
+          publicKeyJwk: credentialRecord.publicKeyJwk,
+          expectedCredentialId: credentialRecord.credentialId,
+          currentSignCount: credentialRecord.signCount,
+        });
+        credentialRecord.signCount = verified.signCount;
+        credentialRecord.lastUsedAt = new Date();
+      } catch {
+        appendAuditEvent(
+          'passkey_login_failed',
+          context,
+          { email: emailNormalized, reason: 'signature_invalid' },
+          user.id,
+          null,
+          90,
+        );
+        throw new ServiceError(401, 'invalid_passkey', 'Invalid passkey assertion');
+      }
+      const challengeRecord = repository.consumeWebAuthnChallenge(
+        user.id,
+        'passkey-login',
+        challenge,
+        new Date(),
+      );
+      if (!challengeRecord || challengeRecord.emailNormalized !== emailNormalized) {
+        appendAuditEvent(
+          'passkey_login_failed',
+          context,
+          { email: emailNormalized, reason: 'challenge_missing' },
+          user.id,
+          null,
+          85,
+        );
+        throw new ServiceError(401, 'invalid_passkey', 'Invalid passkey assertion');
+      }
+      repository.updatePasskeyCredential(credentialRecord);
+
+      const { session, refreshToken, now } = createSessionForUser(user, context, input.deviceName);
+      repository.createSession(session);
+      user.lastLoginAt = now;
+      user.updatedAt = now;
+      repository.updateUser(user);
+
+      appendAuditEvent(
+        'passkey_login_success',
+        context,
+        { credentialId: credentialRecord.credentialId },
+        user.id,
+        session.id,
+      );
+
+      return {
+        ...(await issueAuthResult(user, session)),
+        refreshToken,
+      };
     },
 
     async setupTotp(userId: string): Promise<TotpSetupResponse> {
