@@ -3,6 +3,8 @@ export interface AppEnv {
   documentsBasePath: string;
   proxyBasePath: string;
   appOrigin: string;
+  enableCognitiveAssist: boolean;
+  enableStreamingLogicCheck: boolean;
 }
 
 function trimTrailingSlash(value: string): string {
@@ -14,4 +16,6 @@ export const appEnv: AppEnv = {
   documentsBasePath: trimTrailingSlash(import.meta.env.VITE_DOCUMENTS_BASE_URL ?? '/documents'),
   proxyBasePath: trimTrailingSlash(import.meta.env.VITE_PROXY_BASE_URL ?? '/proxy'),
   appOrigin: trimTrailingSlash(import.meta.env.VITE_APP_ORIGIN ?? window.location.origin),
+  enableCognitiveAssist: import.meta.env.VITE_ENABLE_COGNITIVE_ASSIST === 'true',
+  enableStreamingLogicCheck: import.meta.env.VITE_ENABLE_STREAMING_LOGIC_CHECK !== 'false',
 };

@@ -74,6 +74,31 @@ export async function createBootstrapKeyMaterial(
   return payload;
 }
 
+export async function rewrapUnlockedKeyMaterial(
+  unlocked: UnlockedKeyMaterial,
+  unlockSecret: string,
+  worker: CryptoWorkerClient,
+): Promise<BootstrapKeyMaterialPayload> {
+  const salt = await generateSalt();
+  const kekRaw = await worker.deriveKEK(unlockSecret, salt);
+  const kekWrapKey = await importKEK(kekRaw);
+  const kekEncryptKey = await importAesGcmKey(kekRaw);
+  const wrappedDek = await wrapDEK(kekWrapKey, unlocked.dek);
+  const encryptedSigningSecret = await encrypt(kekEncryptKey, unlocked.signingSecretKey);
+
+  const payload: BootstrapKeyMaterialPayload = {
+    wrappedDek: arrayBufferToBase64(wrappedDek),
+    argon2Salt: bytesToBase64(salt),
+    wrappedSigningSecretKey: bytesToBase64(serializePayload(encryptedSigningSecret)),
+    signingPublicKey: bytesToBase64(unlocked.signingPublicKey),
+    kekVersion: 1,
+    recoveryKit: '',
+  };
+  payload.recoveryKit = createRecoveryKit(payload);
+  new Uint8Array(kekRaw).fill(0);
+  return payload;
+}
+
 export async function unlockWrappedKeyMaterial(
   material: WrappedKeyMaterialRecord,
   unlockSecret: string,

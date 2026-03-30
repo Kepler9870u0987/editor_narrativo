@@ -24,6 +24,6 @@ export const useUnlockStore = create<UnlockState>((set) => ({
   lock: () => {
     const existing = useUnlockStore.getState().unlocked;
     existing?.signingSecretKey.fill(0);
-    set({ status: 'locked', unlocked: null });
+    set({ status: 'locked', material: null, unlocked: null });
   },
 }));

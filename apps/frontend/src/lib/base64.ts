@@ -13,3 +13,19 @@ export function arrayBufferToBase64(buffer: ArrayBuffer): string {
 export function base64ToArrayBuffer(value: string): ArrayBuffer {
   return base64ToBytes(value).buffer;
 }
+
+export function bytesToBase64Url(bytes: Uint8Array): string {
+  return bytesToBase64(bytes).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+export function base64UrlToBytes(value: string): Uint8Array {
+  const normalized = value
+    .replace(/-/g, '+')
+    .replace(/_/g, '/')
+    .padEnd(Math.ceil(value.length / 4) * 4, '=');
+  return base64ToBytes(normalized);
+}
+
+export function stringToBase64Url(value: string): string {
+  return bytesToBase64Url(new TextEncoder().encode(value));
+}
