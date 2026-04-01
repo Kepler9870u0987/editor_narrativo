@@ -303,7 +303,13 @@ export async function createDocumentsServer(config: DocumentsServerConfig) {
   await server.register(fastifyRateLimit, {
     max: 120,
     timeWindow: '1 minute',
-    keyGenerator: (request) => request.headers.authorization ?? request.ip,
+    keyGenerator: (request) => {
+      const auth = request.headers.authorization;
+      if (auth && auth.startsWith('Bearer ')) {
+        return auth;
+      }
+      return request.ip;
+    },
   });
 
   server.addHook('onRequest', async (request, reply) => {
@@ -311,6 +317,13 @@ export async function createDocumentsServer(config: DocumentsServerConfig) {
     if (request.headers.origin && !allowedOrigin) {
       return reply.code(403).send({ error: 'Origin not allowed' });
     }
+
+    // Security headers
+    reply.header('Strict-Transport-Security', 'max-age=63072000; includeSubDomains; preload');
+    reply.header('X-Frame-Options', 'DENY');
+    reply.header('X-Content-Type-Options', 'nosniff');
+    reply.header('Referrer-Policy', 'strict-origin-when-cross-origin');
+    reply.header('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
 
     if (allowedOrigin) {
       reply.header('Access-Control-Allow-Origin', allowedOrigin);

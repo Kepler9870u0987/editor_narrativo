@@ -23,6 +23,7 @@
     "@editor-narrativo/rag": "workspace:*",
     "@editor-narrativo/shared": "workspace:*",
     "@tanstack/react-query": "^5.59.0",
+    "@tiptap/pm": "^3.22.0",
     "dexie": "^4.0.8",
     "onnxruntime-web": "^1.24.3",
     "react": "^18.3.1",

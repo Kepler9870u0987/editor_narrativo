@@ -398,6 +398,13 @@ export async function createAccountServer(
       return reply.code(403).send({ error: 'Origin not allowed' });
     }
 
+    // Security headers
+    reply.header('Strict-Transport-Security', 'max-age=63072000; includeSubDomains; preload');
+    reply.header('X-Frame-Options', 'DENY');
+    reply.header('X-Content-Type-Options', 'nosniff');
+    reply.header('Referrer-Policy', 'strict-origin-when-cross-origin');
+    reply.header('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+
     if (allowedOrigin) {
       reply.header('Access-Control-Allow-Origin', allowedOrigin);
       reply.header('Vary', 'Origin');

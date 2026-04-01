@@ -2,15 +2,17 @@
  * Semantic Highlighting — Applies visual inline markers on text
  * identified as conflicting by the Logic Check system.
  *
- * Uses the underlying Tiptap/ProseMirror editor to programmatically
- * apply and remove conflict marks without disrupting the document model.
+ * Uses ProseMirror Decoration plugin (via @tiptap/pm) to overlay
+ * highlight ranges without mutating the document model.
  *
  * Severity levels:
- *   - high:   red background — logical/causal violations
- *   - medium: orange background — detail/tone inconsistencies
- *   - low:    yellow background — minor descriptive discrepancies
+ *   - high:   red underline — logical/causal violations
+ *   - medium: orange underline — detail/tone inconsistencies
+ *   - low:    yellow underline — minor descriptive discrepancies
  */
 
+import { Plugin, PluginKey } from '@tiptap/pm/state';
+import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import type { LogicCheckResponse } from '@editor-narrativo/shared';
 
 /**
@@ -182,6 +184,16 @@ function deduplicateRanges(ranges: HighlightRange[]): HighlightRange[] {
   return merged;
 }
 
+const SEMANTIC_HIGHLIGHT_KEY = new PluginKey('semanticHighlight');
+
+function hasHighlightPlugin(state: any): boolean {
+  return SEMANTIC_HIGHLIGHT_KEY.getState(state) !== undefined;
+}
+
+function filterOutHighlightPlugin(plugins: any[]): any[] {
+  return plugins.filter((p: any) => p.spec.key !== SEMANTIC_HIGHLIGHT_KEY);
+}
+
 /**
  * Apply semantic highlight decorations to the editor.
  * Uses ProseMirror Decoration plugin to overlay without mutating content.
@@ -192,24 +204,13 @@ export function applySemanticHighlights(
 ): void {
   if (!tiptapEditor) return;
 
-  const { Plugin, PluginKey } = tiptapEditor.state.constructor;
-  // Access ProseMirror via Tiptap
   const pmView = tiptapEditor.view;
   if (!pmView) return;
 
-  const pluginKey = new PluginKey('semanticHighlight');
-
-  // Remove existing plugin if present
-  const existingPlugin = pmView.state.plugins.find(
-    (p: any) => p.spec.key === pluginKey,
-  );
-
   if (!result || !result.hasConflict) {
-    // Clear highlights
-    if (existingPlugin) {
-      const { state } = pmView;
-      const newPlugins = state.plugins.filter((p: any) => p.spec.key !== pluginKey);
-      const newState = state.reconfigure({ plugins: newPlugins });
+    if (hasHighlightPlugin(pmView.state)) {
+      const newPlugins = filterOutHighlightPlugin(pmView.state.plugins);
+      const newState = pmView.state.reconfigure({ plugins: newPlugins });
       pmView.updateState(newState);
     }
     return;
@@ -218,9 +219,6 @@ export function applySemanticHighlights(
   const ranges = computeHighlightRanges(tiptapEditor, result);
   if (ranges.length === 0) return;
 
-  // Import Decoration from prosemirror-view
-  const { Decoration, DecorationSet } = require('prosemirror-view');
-
   const decorations = ranges.map((range) =>
     Decoration.inline(range.from, range.to, {
       class: HIGHLIGHT_CLASSES[range.severity] ?? HIGHLIGHT_CLASSES.medium,
@@ -228,20 +226,21 @@ export function applySemanticHighlights(
     }),
   );
 
+  const decoSet = DecorationSet.create(pmView.state.doc, decorations);
+
   const plugin = new Plugin({
-    key: pluginKey,
+    key: SEMANTIC_HIGHLIGHT_KEY,
+    state: {
+      init: () => decoSet,
+      apply: (_tr: any, value: any) => value,
+    },
     props: {
-      decorations: () => DecorationSet.create(pmView.state.doc, decorations),
+      decorations: (state: any) => SEMANTIC_HIGHLIGHT_KEY.getState(state),
     },
   });
 
-  // Add plugin to editor
-  const { state } = pmView;
-  const newPlugins = [
-    ...state.plugins.filter((p: any) => p.spec.key !== pluginKey),
-    plugin,
-  ];
-  const newState = state.reconfigure({ plugins: newPlugins });
+  const newPlugins = [...filterOutHighlightPlugin(pmView.state.plugins), plugin];
+  const newState = pmView.state.reconfigure({ plugins: newPlugins });
   pmView.updateState(newState);
 }
 
