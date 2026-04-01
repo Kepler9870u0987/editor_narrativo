@@ -4,11 +4,8 @@ import {
   defaultInlineContentSpecs,
   filterSuggestionItems,
   insertOrUpdateBlock,
-  type PartialBlock,
 } from '@blocknote/core';
 import {
-  BlockContentWrapper,
-  InlineContentWrapper,
   createReactBlockSpec,
   createReactInlineContentSpec,
   getDefaultReactSlashMenuItems,
@@ -28,16 +25,14 @@ const characterSheet = createReactBlockSpec(
   },
   {
     render: ({ block, contentRef }) => (
-      <BlockContentWrapper block={block} blockType="characterSheet">
-        <div className="bn-inline-card bn-inline-card--character">
-          <div className="button-row">
-            <span className="pill">Scheda personaggio</span>
-            <span className="pill">{block.props.role}</span>
-          </div>
-          <strong>{block.props.characterName}</strong>
-          <div ref={contentRef} />
+      <div className="bn-inline-card bn-inline-card--character" data-block-type="characterSheet">
+        <div className="button-row">
+          <span className="pill">Scheda personaggio</span>
+          <span className="pill">{block.props.role}</span>
         </div>
-      </BlockContentWrapper>
+        <strong>{block.props.characterName}</strong>
+        <div ref={contentRef} />
+      </div>
     ),
   },
 );
@@ -56,15 +51,16 @@ const narrativeAlert = createReactBlockSpec(
   },
   {
     render: ({ block, contentRef }) => (
-      <BlockContentWrapper block={block} blockType="narrativeAlert">
-        <div className={`bn-inline-card bn-inline-card--alert bn-inline-card--${block.props.severity}`}>
-          <div className="button-row">
-            <span className="pill">{block.props.title}</span>
-            <span className="pill">{block.props.severity}</span>
-          </div>
-          <div ref={contentRef} />
+      <div
+        className={`bn-inline-card bn-inline-card--alert bn-inline-card--${block.props.severity}`}
+        data-block-type="narrativeAlert"
+      >
+        <div className="button-row">
+          <span className="pill">{block.props.title}</span>
+          <span className="pill">{block.props.severity}</span>
         </div>
-      </BlockContentWrapper>
+        <div ref={contentRef} />
+      </div>
     ),
   },
 );
@@ -80,14 +76,12 @@ const toggleSection = createReactBlockSpec(
   },
   {
     render: ({ block, contentRef }) => (
-      <BlockContentWrapper block={block} blockType="toggleSection">
-        <details className="bn-toggle-section" open>
-          <summary>
-            <span className="pill">{block.props.tone}</span> {block.props.label}
-          </summary>
-          <div ref={contentRef} />
-        </details>
-      </BlockContentWrapper>
+      <details className="bn-toggle-section" data-block-type="toggleSection" open>
+        <summary>
+          <span className="pill">{block.props.tone}</span> {block.props.label}
+        </summary>
+        <div ref={contentRef} />
+      </details>
     ),
   },
 );
@@ -107,11 +101,9 @@ const entityMention = createReactInlineContentSpec(
   },
   {
     render: ({ inlineContent }) => (
-      <InlineContentWrapper inlineContentProps={inlineContent.props} inlineContentType="entityMention">
-        <span className={`bn-mention bn-mention--${inlineContent.props.entityType}`}>
-          @{inlineContent.props.label}
-        </span>
-      </InlineContentWrapper>
+      <span className={`bn-mention bn-mention--${inlineContent.props.entityType}`}>
+        @{inlineContent.props.label}
+      </span>
     ),
   },
 );
@@ -129,17 +121,12 @@ export const narrativeSchema = BlockNoteSchema.create({
   },
 });
 
-type NarrativeEditorType = typeof narrativeSchema.BlockNoteEditor;
-export type NarrativeEditor = InstanceType<NarrativeEditorType>;
-export type NarrativePartialBlock = PartialBlock<
-  typeof narrativeSchema.blockSchema,
-  typeof narrativeSchema.inlineContentSchema,
-  typeof narrativeSchema.styleSchema
->;
+export type NarrativeEditor = any;
+export type NarrativePartialBlock = any;
 
 export interface NarrativeBlockLike {
   id?: string;
-  type: string;
+  type?: string;
   props?: Record<string, unknown>;
   content?: Array<Record<string, unknown>> | string | undefined;
   children?: NarrativeBlockLike[];

@@ -58,7 +58,8 @@ export async function createBootstrapKeyMaterial(
   const dek = await generateDEK();
   const wrappedDek = await wrapDEK(kekWrapKey, dek);
   const signingKeyPair = await worker.generateSigningKeyPair();
-  const encryptedSigningSecret = await encrypt(kekEncryptKey, signingKeyPair.secretKey);
+  const signingSecretForWrap = signingKeyPair.secretKey.slice();
+  const encryptedSigningSecret = await encrypt(kekEncryptKey, signingSecretForWrap);
 
   const payload: BootstrapKeyMaterialPayload = {
     wrappedDek: arrayBufferToBase64(wrappedDek),
@@ -84,7 +85,7 @@ export async function rewrapUnlockedKeyMaterial(
   const kekWrapKey = await importKEK(kekRaw);
   const kekEncryptKey = await importAesGcmKey(kekRaw);
   const wrappedDek = await wrapDEK(kekWrapKey, unlocked.dek);
-  const encryptedSigningSecret = await encrypt(kekEncryptKey, unlocked.signingSecretKey);
+  const encryptedSigningSecret = await encrypt(kekEncryptKey, unlocked.signingSecretKey.slice());
 
   const payload: BootstrapKeyMaterialPayload = {
     wrappedDek: arrayBufferToBase64(wrappedDek),

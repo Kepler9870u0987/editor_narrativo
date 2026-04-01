@@ -11,7 +11,8 @@ export function arrayBufferToBase64(buffer: ArrayBuffer): string {
 }
 
 export function base64ToArrayBuffer(value: string): ArrayBuffer {
-  return base64ToBytes(value).buffer;
+  const bytes = base64ToBytes(value);
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
 }
 
 export function bytesToBase64Url(bytes: Uint8Array): string {

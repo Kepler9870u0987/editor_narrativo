@@ -7,13 +7,13 @@ import {
   useState,
   type FormEvent,
 } from 'react';
-import { BlockNoteView, SuggestionMenuController, useCreateBlockNote } from '@blocknote/react';
+import { BlockNoteViewRaw, SuggestionMenuController, useCreateBlockNote } from '@blocknote/react';
 import type { DocumentKind, DocumentSummary } from '@editor-narrativo/documents-shared';
 import type { LogicCheckResponse } from '@editor-narrativo/shared';
 import { appEnv } from '../../lib/env';
 import { decryptJsonSnapshot, encryptJsonSnapshot } from '../../lib/keys';
 import { editorDb, type LocalDocumentRecord } from '../../lib/storage';
-import { complete } from '../logic-check/proxy-api';
+import { proxyApi } from '../logic-check/proxy-api';
 import { LogicCheckStreamClient } from '../logic-check/logic-check-stream';
 import { useUnlockStore } from '../unlock/unlock-store';
 import { accountApi } from '../auth/account-api';
@@ -111,10 +111,10 @@ function parseSerializedBlocks(serialized: string): NarrativePartialBlock[] {
 }
 
 function replaceEditorContents(
-  editor: ReturnType<typeof useCreateBlockNote<typeof narrativeSchema.blockSchema, typeof narrativeSchema.inlineContentSchema, typeof narrativeSchema.styleSchema>>,
+  editor: any,
   blocks: NarrativePartialBlock[],
 ): void {
-  const currentIds = editor.document.map((block) => block.id);
+  const currentIds = editor.document.map((block: any) => block.id);
   editor.replaceBlocks(currentIds, blocks.length > 0 ? blocks : EMPTY_DOCUMENT);
 }
 
@@ -169,8 +169,8 @@ function NarrativeWorkspace({
         setLocalClock(loaded.localClock);
         lastSerializedRef.current = JSON.stringify(loaded.blocks);
         startTransition(() => {
-          setEntities(collectNarrativeEntities(loaded.blocks as NarrativeBlockLike[]));
-          setAlerts(collectNarrativeAlerts(loaded.blocks as NarrativeBlockLike[]));
+          setEntities(collectNarrativeEntities(loaded.blocks as unknown as NarrativeBlockLike[]));
+          setAlerts(collectNarrativeAlerts(loaded.blocks as unknown as NarrativeBlockLike[]));
         });
       })
       .catch((error) => {
@@ -220,8 +220,8 @@ function NarrativeWorkspace({
       lastSerializedRef.current = JSON.stringify(blocks);
       replaceEditorContents(editor, blocks);
       startTransition(() => {
-        setEntities(collectNarrativeEntities(blocks as NarrativeBlockLike[]));
-        setAlerts(collectNarrativeAlerts(blocks as NarrativeBlockLike[]));
+        setEntities(collectNarrativeEntities(blocks as unknown as NarrativeBlockLike[]));
+        setAlerts(collectNarrativeAlerts(blocks as unknown as NarrativeBlockLike[]));
       });
     });
 
@@ -318,7 +318,7 @@ function NarrativeWorkspace({
         return;
       }
 
-      const result = await complete(accessToken, { sceneText, ragContext });
+      const result = await proxyApi.complete(accessToken, { sceneText, ragContext });
       setLogicCheckResult(result);
     } finally {
       if (!streamingMode) {
@@ -382,7 +382,7 @@ function NarrativeWorkspace({
           </div>
         </div>
         <div className="editor-surface__content" ref={hostRef}>
-          <BlockNoteView editor={editor} theme="light">
+          <BlockNoteViewRaw editor={editor} theme="light">
             <SuggestionMenuController
               triggerCharacter="/"
               getItems={async (query) => filterSlashItems(editor, query)}
@@ -391,7 +391,7 @@ function NarrativeWorkspace({
               triggerCharacter="@"
               getItems={async (query) => getMentionMenuItems(editor, entities, query)}
             />
-          </BlockNoteView>
+          </BlockNoteViewRaw>
         </div>
       </section>
 
@@ -419,14 +419,12 @@ function NarrativeWorkspace({
   );
 }
 
-function filterSlashItems(editor: NarrativeWorkspaceEditor, query: string) {
+function filterSlashItems(editor: any, query: string) {
   return getNarrativeSlashMenuItems(editor).filter((item) => {
     const haystack = `${item.title} ${item.subtext ?? ''} ${(item.aliases ?? []).join(' ')}`.toLowerCase();
     return haystack.includes(query.toLowerCase());
   });
 }
-
-type NarrativeWorkspaceEditor = ReturnType<typeof useCreateBlockNote<typeof narrativeSchema.blockSchema, typeof narrativeSchema.inlineContentSchema, typeof narrativeSchema.styleSchema>>;
 
 function LogicResultPanel({ result }: { result: LogicCheckResponse }) {
   return (

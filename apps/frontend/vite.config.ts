@@ -16,6 +16,9 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
   return {
     plugins: [react()],
+    resolve: {
+      extensions: ['.ts', '.tsx', '.mjs', '.js', '.jsx', '.json'],
+    },
     server: {
       host: '127.0.0.1',
       port: 5173,
