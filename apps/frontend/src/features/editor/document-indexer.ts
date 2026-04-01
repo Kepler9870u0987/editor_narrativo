@@ -14,7 +14,7 @@ import { chunkText } from '@editor-narrativo/rag';
 import type { EmbeddingModel } from '@editor-narrativo/rag';
 import type { HNSWConfig } from '@editor-narrativo/shared';
 import { HNSW_DEFAULTS } from '@editor-narrativo/shared';
-import { PersistedVectorIndex } from '../lib/persisted-vector-index';
+import { PersistedVectorIndex } from '../../lib/persisted-vector-index';
 import {
   blocksToPlainText,
   type NarrativeBlockLike,

@@ -228,10 +228,10 @@ Legenda stati: ✅ Completato | 🔲 Da fare
 | | | 6.5.4 Pending updates queue in IndexedDB (Dexie) | ✅ |
 | | | 6.5.5 Riconnessione automatica su visibilitychange | ✅ |
 | 6.6 | Integrazione RAG in-browser | | |
-| | | 6.6.1 Web Worker per inferenza ONNX (rag-worker) | 🔲 |
-| | | 6.6.2 `OnnxEmbeddingModel` — caricamento nomic-embed-text-v1.5 via WebGPU | 🔲 |
-| | | 6.6.3 `PersistedVectorIndex` — BruteForce/HNSW con persistenza IndexedDB | 🔲 |
-| | | 6.6.4 `DocumentIndexer` — indicizzazione automatica incrementale per block UUID | 🔲 |
+| | | 6.6.1 Web Worker per inferenza ONNX (rag-worker) | ✅ |
+| | | 6.6.2 `OnnxEmbeddingModel` — caricamento nomic-embed-text-v1.5 via WebGPU | ✅ |
+| | | 6.6.3 `PersistedVectorIndex` — BruteForce/HNSW con persistenza IndexedDB | ✅ |
+| | | 6.6.4 `DocumentIndexer` — indicizzazione automatica incrementale per block UUID | ✅ |
 | | | 6.6.5 RAG context full-text locale (fallback attivo) | ✅ |
 | 6.7 | Biometria Cognitiva & Trigger Predittivo | | ✅ |
 | | | 6.7.1 Event listener Dwell Time / Flight Time (useCognitiveSignals) | ✅ |
@@ -240,7 +240,7 @@ Legenda stati: ✅ Completato | 🔲 Da fare
 | 6.8 | Logic Check UI & Semantic Highlighting | | |
 | | | 6.8.1 Chiamata proxy LLM REST + WebSocket streaming | ✅ |
 | | | 6.8.2 Parsing risposta JSON `evidence_chains` + panel risultati | ✅ |
-| | | 6.8.3 Marker visivo inline su testo in conflitto (Semantic Highlighting) | 🔲 |
+| | | 6.8.3 Marker visivo inline su testo in conflitto (Semantic Highlighting) | ✅ |
 | 6.9 | WebSocket client & riconnessione | | ✅ |
 | | | 6.9.1 LogicCheckStreamClient WS con In-Band Auth JWT | ✅ |
 | | | 6.9.2 Riconnessione automatica su `visibilitychange` | ✅ |
@@ -272,16 +272,10 @@ Legenda stati: ✅ Completato | 🔲 Da fare
 | 5 | proxy-backend | ✅ | 36/36 | ✅ |
 | 5b | account-backend + shared | ✅ | 5/5 | ✅ |
 | 5c | documents-backend + shared | ✅ | 2/2 | ✅ |
-| 6 | frontend | ✅ | — | ~90% |
+| 6 | frontend | ✅ | — | ✅ |
 
-**Totale test backend: 92 ✅** — **Completamento backend: 100%**
+**Totale test backend: 92 ✅** — **Completamento backend: 100%** — **Frontend: 100%**
 
-### Task rimanenti (Fase 6)
+### Task rimanenti
 
-| # | Task | Priorità |
-|---|------|----------|
-| 6.6.1 | RAG Worker ONNX — Web Worker per inferenza embedding | Alta |
-| 6.6.2 | `OnnxEmbeddingModel` — caricamento modello via WebGPU | Alta |
-| 6.6.3 | `PersistedVectorIndex` — indice vettoriale con persistenza IndexedDB | Alta |
-| 6.6.4 | `DocumentIndexer` — indicizzazione incrementale automatica | Alta |
-| 6.8.3 | Semantic Highlighting — marker visivi inline su conflitti | Media |
+Nessun task rimanente. Tutte le funzionalità previste sono implementate.

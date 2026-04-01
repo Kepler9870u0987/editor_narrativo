@@ -103,26 +103,27 @@ function meanPool(
     if (attentionMask[t] === 1n) {
       tokenCount++;
       for (let d = 0; d < dim; d++) {
-        result[d] += data[t * dim + d]!;
+        result[d]! += data[t * dim + d] ?? 0;
       }
     }
   }
 
   if (tokenCount > 0) {
     for (let d = 0; d < dim; d++) {
-      result[d] /= tokenCount;
+      result[d]! /= tokenCount;
     }
   }
 
   // L2 normalize
   let sumSq = 0;
   for (let d = 0; d < dim; d++) {
-    sumSq += result[d]! * result[d]!;
+    const v = result[d] ?? 0;
+    sumSq += v * v;
   }
   const norm = Math.sqrt(sumSq);
   if (norm > 0) {
     for (let d = 0; d < dim; d++) {
-      result[d] /= norm;
+      result[d]! /= norm;
     }
   }
 
@@ -193,7 +194,7 @@ async function handleEmbed(request: EmbedRequest): Promise<WorkerResponse> {
       const lastHidden = output[session.outputNames[0]!]!;
 
       const pooled = meanPool(lastHidden, attentionMask, maxSeqLength, modelDim);
-      vectors.push(pooled.buffer);
+      vectors.push(pooled.buffer as ArrayBuffer);
     }
 
     return { type: 'EMBED_DONE', id: request.id, vectors };

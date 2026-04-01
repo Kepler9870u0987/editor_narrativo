@@ -326,6 +326,8 @@ function NarrativeWorkspace({
     };
   }, [document.id, editor, initialBlocks]);
 
+  const logicResult = useEditorStore((state) => state.logicCheckResult);
+
   // Apply semantic highlighting when logic check results change
   useEffect(() => {
     const tiptap = (editor as any)?._tiptapEditor;
@@ -393,8 +395,6 @@ function NarrativeWorkspace({
       }
     }
   }
-
-  const logicResult = useEditorStore((state) => state.logicCheckResult);
 
   if (!unlocked || !initialBlocks) {
     return <p className="muted">Apertura documento...</p>;
