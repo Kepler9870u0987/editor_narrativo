@@ -274,7 +274,28 @@ Legenda stati: ✅ Completato | 🔲 Da fare
 | 5c | documents-backend + shared | ✅ | 2/2 | ✅ |
 | 6 | frontend | ✅ | — | ✅ |
 
-**Totale test backend: 92 ✅** — **Completamento backend: 100%** — **Frontend: 100%**
+**Totale test backend: 92 ✅** — **Frontend unit tests: 38 ✅** — **Completamento: 100%**
+
+---
+
+## Fase 7 — Hardening & Qualità Produzione ✅
+
+| # | Task | Stato |
+|---|------|-------|
+| 7.1 | Fix ESM: semantic-highlighting.ts usa import @tiptap/pm (no require) | ✅ |
+| 7.2 | Security headers su account-backend (HSTS, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy) | ✅ |
+| 7.3 | Security headers su proxy-backend + fix rate-limit keyGenerator | ✅ |
+| 7.4 | Security headers su documents-backend + fix rate-limit keyGenerator | ✅ |
+| 7.5 | Suite test unitari frontend (5 file, 38 test) | ✅ |
+| 7.5.1 | blocknote-schema.test.ts — blocksToPlainText, collectNarrativeEntities, collectNarrativeAlerts (11 test) | ✅ |
+| 7.5.2 | semantic-highlighting.test.ts — computeHighlightRanges con mock ProseMirror (5 test) | ✅ |
+| 7.5.3 | persisted-vector-index.test.ts — CRUD IndexedDB + search + persist/reload (7 test) | ✅ |
+| 7.5.4 | document-indexer.test.ts — indexing incrementale + mock EmbeddingModel (6 test) | ✅ |
+| 7.5.5 | rag-context.test.ts — normalizeTerms, scoreChunk (9 test) | ✅ |
+| 7.6 | Infrastruttura Playwright E2E — config con webServer, reporter HTML, progetto Chromium | ✅ |
+| 7.6.1 | Smoke test E2E: caricamento app, pagina login, pagina registrazione | ✅ |
+
+---
 
 ### Task rimanenti
 

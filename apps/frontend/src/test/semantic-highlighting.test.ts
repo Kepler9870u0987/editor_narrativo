@@ -25,7 +25,6 @@ describe('computeHighlightRanges', () => {
       hasConflict: false,
       conflicts: [],
       evidence_chains: [],
-      reasoning: '',
     };
     expect(computeHighlightRanges(editor, result)).toEqual([]);
   });
@@ -35,7 +34,6 @@ describe('computeHighlightRanges', () => {
       hasConflict: true,
       conflicts: [{ description: 'A conflict', severity: 'high' }],
       evidence_chains: [],
-      reasoning: '',
     };
     expect(computeHighlightRanges(null, result)).toEqual([]);
   });
@@ -52,7 +50,6 @@ describe('computeHighlightRanges', () => {
         },
       ],
       evidence_chains: [],
-      reasoning: 'test',
     };
     const ranges = computeHighlightRanges(editor, result);
     // "stanza illuminata dal sole" is long enough (>10 chars) to be extracted as a key phrase
@@ -71,11 +68,10 @@ describe('computeHighlightRanges', () => {
       evidence_chains: [
         {
           sceneStatement: 'torre antica si ergeva sulla collina',
-          memoryFact: 'The tower was in the valley',
+          bibleExcerpt: 'The tower was in the valley',
           contradiction: 'Location mismatch',
         },
       ],
-      reasoning: 'test',
     };
     const ranges = computeHighlightRanges(editor, result);
     // Should match the scene statement text
@@ -93,7 +89,6 @@ describe('computeHighlightRanges', () => {
         { description: 'vecchio castello dominava il paesaggio', severity: 'high' },
       ],
       evidence_chains: [],
-      reasoning: 'test',
     };
     const ranges = computeHighlightRanges(editor, result);
     // Should be deduplicated to one range

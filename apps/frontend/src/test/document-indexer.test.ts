@@ -25,7 +25,6 @@ function createMockEmbeddingModel(): EmbeddingModel {
         return v;
       });
     },
-    async init() {},
   };
 }
 
