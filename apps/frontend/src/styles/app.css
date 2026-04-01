@@ -215,6 +215,34 @@ a {
   padding: 12px 20px 28px;
 }
 
+/* ── Semantic Highlighting (conflict markers) ── */
+
+.conflict-highlight {
+  border-radius: 3px;
+  padding: 1px 2px;
+  cursor: help;
+  transition: background 0.2s ease;
+}
+
+.conflict-highlight--high {
+  background: rgba(165, 40, 40, 0.22);
+  border-bottom: 2px solid var(--danger);
+}
+
+.conflict-highlight--medium {
+  background: rgba(210, 130, 40, 0.2);
+  border-bottom: 2px solid #c87d20;
+}
+
+.conflict-highlight--low {
+  background: rgba(200, 180, 60, 0.18);
+  border-bottom: 2px solid #b09830;
+}
+
+.conflict-highlight:hover {
+  filter: brightness(0.92);
+}
+
 .list {
   display: grid;
   gap: 10px;

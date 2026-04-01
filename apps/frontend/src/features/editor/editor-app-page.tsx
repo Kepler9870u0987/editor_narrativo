@@ -29,10 +29,13 @@ import {
   type NarrativePartialBlock,
 } from './blocknote-schema';
 import { DocumentSyncEngine, type DocumentSyncState } from './document-sync';
+import { DocumentIndexer } from './document-indexer';
 import { documentsApi } from './documents-api';
 import { useEditorStore } from './editor-store';
 import { buildLocalRagContext } from './rag-context';
+import { applySemanticHighlights } from './semantic-highlighting';
 import { useCognitiveSignals } from './use-cognitive-signals';
+import { OnnxEmbeddingModel, defaultOnnxEmbeddingConfig } from '../../lib/onnx-embedding-model';
 
 const EMPTY_DOCUMENT: NarrativePartialBlock[] = [
   {
@@ -142,6 +145,8 @@ function NarrativeWorkspace({
   const lastSerializedRef = useRef(JSON.stringify(EMPTY_DOCUMENT));
   const saveTimerRef = useRef<number | null>(null);
   const streamClientRef = useRef<LogicCheckStreamClient | null>(null);
+  const indexerRef = useRef<DocumentIndexer | null>(null);
+  const indexTimerRef = useRef<number | null>(null);
   const editor = useCreateBlockNote(
     {
       schema: narrativeSchema,
@@ -265,6 +270,14 @@ function NarrativeWorkspace({
         );
         void syncEngineRef.current?.createSnapshot().catch(() => undefined);
       }, 900);
+
+      // Debounced incremental re-indexing for RAG
+      if (indexTimerRef.current) {
+        window.clearTimeout(indexTimerRef.current);
+      }
+      indexTimerRef.current = window.setTimeout(() => {
+        void indexerRef.current?.updateIndex(blocks).catch(() => undefined);
+      }, 2000);
     });
 
     return () => {
@@ -283,14 +296,68 @@ function NarrativeWorkspace({
     };
   }, []);
 
+  // Initialize DocumentIndexer for vector-based RAG
+  useEffect(() => {
+    if (!initialBlocks) return;
+
+    const embeddingModel = new OnnxEmbeddingModel(defaultOnnxEmbeddingConfig());
+    const indexer = new DocumentIndexer({
+      documentId: document.id,
+      embeddingModel,
+    });
+    indexerRef.current = indexer;
+
+    // Init is async — warm up model + load persisted vectors
+    void indexer.init().then(() => {
+      // Index the initial content
+      const blocks = editor.document as unknown as NarrativeBlockLike[];
+      void indexer.updateIndex(blocks);
+    }).catch(() => {
+      // ONNX model may not be available; RAG falls back to full-text
+    });
+
+    return () => {
+      if (indexTimerRef.current) {
+        window.clearTimeout(indexTimerRef.current);
+        indexTimerRef.current = null;
+      }
+      indexerRef.current = null;
+      embeddingModel.terminate();
+    };
+  }, [document.id, editor, initialBlocks]);
+
+  // Apply semantic highlighting when logic check results change
+  useEffect(() => {
+    const tiptap = (editor as any)?._tiptapEditor;
+    if (tiptap) {
+      applySemanticHighlights(tiptap, logicResult);
+    }
+  }, [editor, logicResult]);
+
   async function runLogicCheck(streamingMode: boolean) {
     const blocks = editor.document as unknown as NarrativeBlockLike[];
     const sceneText = blocksToPlainText(blocks);
-    const ragContext = await buildLocalRagContext(
-      sceneText,
-      unlocked!.subKeys.textEncryptionKey,
-      document.id,
-    );
+
+    // Try vector-based RAG first, fall back to full-text
+    let ragContext: string[];
+    try {
+      if (indexerRef.current && indexerRef.current.indexSize > 0) {
+        const vectorResults = await indexerRef.current.search(sceneText, 6, 0.4);
+        ragContext = vectorResults.map((r) => r.text);
+      } else {
+        ragContext = await buildLocalRagContext(
+          sceneText,
+          unlocked!.subKeys.textEncryptionKey,
+          document.id,
+        );
+      }
+    } catch {
+      ragContext = await buildLocalRagContext(
+        sceneText,
+        unlocked!.subKeys.textEncryptionKey,
+        document.id,
+      );
+    }
 
     setLogicBusy(true);
     setStreamText('');

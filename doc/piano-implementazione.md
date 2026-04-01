@@ -1,6 +1,6 @@
 # Piano di Implementazione — Editor Narrativo AI-Augmented
 
-> Generato il 27/03/2026 — Stato aggiornato al termine della Fase 1–5 (backend).
+> Generato il 27/03/2026 — Stato aggiornato al 01/04/2026.
 
 Legenda stati: ✅ Completato | 🔲 Da fare
 
@@ -170,47 +170,93 @@ Legenda stati: ✅ Completato | 🔲 Da fare
 
 ---
 
-## Fase 6 — Package `frontend` (React + BlockNote) 🔲
+## Fase 5b — Package `account-backend` + `account-shared` (Account System) ✅
+
+| # | Task | Stato |
+|---|------|-------|
+| 5b.1 | Schema DB utenti, sessioni, token, MFA, passkey, wrapped keys, audit | ✅ |
+| 5b.2 | `AccountService` — 25+ metodi (register, login, verify-email, TOTP, WebAuthn, sessions) | ✅ |
+| 5b.3 | `PasswordHasher` — Argon2id server-side | ✅ |
+| 5b.4 | `TokenService` — EdDSA JWT access token + JWKS | ✅ |
+| 5b.5 | `TOTPService` — setup, verify, recovery codes | ✅ |
+| 5b.6 | `WebAuthnService` — challenge, registration, authentication CBOR/COSE | ✅ |
+| 5b.7 | `SQLiteAccountRepository` — persistenza SQLite | ✅ |
+| 5b.8 | Server Fastify — 15+ endpoint REST (auth, profile, sessions, MFA, passkey, keys) | ✅ |
+| 5b.9 | `account-shared` — 15+ tipi condivisi per contratti frontend/backend | ✅ |
+| 5b.10 | Test E2E: register → verify → login → refresh → MFA → passkey → JWKS | ✅ |
+
+---
+
+## Fase 5c — Package `documents-backend` + `documents-shared` (Gestione Documenti) ✅
+
+| # | Task | Stato |
+|---|------|-------|
+| 5c.1 | CRUD documenti con ownership validation | ✅ |
+| 5c.2 | Snapshot cifrato (one per document) | ✅ |
+| 5c.3 | Incremental updates con Lamport clock + batch atomici | ✅ |
+| 5c.4 | WebSocket real-time sync (AUTH, SUBSCRIBE, PUSH_UPDATE, MISSING_UPDATES) | ✅ |
+| 5c.5 | SQLite persistence con WAL mode | ✅ |
+| 5c.6 | `documents-shared` — tipi documenti, snapshot cifrati, protocollo WS | ✅ |
+| 5c.7 | Test E2E: snapshot persistence, WS auth + real-time updates | ✅ |
+
+---
+
+## Fase 6 — Frontend (React + BlockNote)
 
 | # | Task | Subtask | Stato |
 |---|------|---------|-------|
-| 6.1 | Setup React + Vite + BlockNote | | 🔲 |
-| | | 6.1.1 Inizializzazione progetto Vite + React + TypeScript | 🔲 |
-| | | 6.1.2 Integrazione BlockNote editor con schema default | 🔲 |
-| | | 6.1.3 Header HTTP COOP/COEP per SharedArrayBuffer | 🔲 |
-| 6.2 | Custom Blocks (Schede Personaggio / Alert Narrativi) | | 🔲 |
-| | | 6.2.1 `createReactBlockSpec` — definizione PropSchema e render component | 🔲 |
-| | | 6.2.2 Integrazione Slash Menu con `insertOrUpdateBlockForSlashMenu` | 🔲 |
-| | | 6.2.3 ToggleWrapper per blocchi toggleable | 🔲 |
-| 6.3 | Custom Inline Content (Entity Tags & Mentions) | | 🔲 |
-| | | 6.3.1 `createReactInlineContentSpec` — tag entità con UUID | 🔲 |
-| | | 6.3.2 `SuggestionMenuController` per trigger `@` | 🔲 |
-| | | 6.3.3 `getMentionMenuItems` — query + filtro + `insertInlineContent` | 🔲 |
-| 6.4 | Integrazione Crypto Web Worker | | 🔲 |
-| | | 6.4.1 Spawning Web Worker dedicato per Argon2id | 🔲 |
-| | | 6.4.2 Comunicazione tipizzata con CryptoWorkerClient | 🔲 |
-| | | 6.4.3 UI login/unlock con derivazione KEK | 🔲 |
-| 6.5 | Integrazione CRDT/Yjs | | 🔲 |
-| | | 6.5.1 Binding Yjs ↔ BlockNote document model | 🔲 |
-| | | 6.5.2 SecSyncProvider con WebSocket transport | 🔲 |
-| | | 6.5.3 Indicatore di stato connessione nella UI | 🔲 |
-| 6.6 | Integrazione RAG in-browser | | 🔲 |
-| | | 6.6.1 Web Worker pool per inferenza ONNX | 🔲 |
-| | | 6.6.2 Caricamento modello nomic-embed-text-v1.5 via WebGPU | 🔲 |
-| | | 6.6.3 VectorIndex con persistenza IndexedDB (IDBFS) | 🔲 |
-| | | 6.6.4 Indicizzazione automatica dei contenuti del documento | 🔲 |
-| 6.7 | Biometria Cognitiva & Trigger Predittivo | | 🔲 |
-| | | 6.7.1 Event listener Dwell Time / Flight Time | 🔲 |
-| | | 6.7.2 Rilevamento pattern correttivi (Backspace frequency) | 🔲 |
-| | | 6.7.3 Soglia probabilistica → trigger RAG automatico | 🔲 |
-| 6.8 | Logic Check UI & Semantic Highlighting | | 🔲 |
-| | | 6.8.1 Chiamata proxy LLM con prompt logic check | 🔲 |
-| | | 6.8.2 Parsing risposta JSON `evidence_chains` | 🔲 |
+| 6.1 | Setup React + Vite + BlockNote | | ✅ |
+| | | 6.1.1 Inizializzazione progetto Vite + React + TypeScript | ✅ |
+| | | 6.1.2 Integrazione BlockNote editor con schema custom (narrativeSchema) | ✅ |
+| | | 6.1.3 Header HTTP COOP/COEP per SharedArrayBuffer | ✅ |
+| 6.2 | Custom Blocks (Schede Personaggio / Alert Narrativi) | | ✅ |
+| | | 6.2.1 `createReactBlockSpec` — characterSheet, narrativeAlert, toggleSection | ✅ |
+| | | 6.2.2 Integrazione Slash Menu con `insertOrUpdateBlock` + items Narrativa | ✅ |
+| | | 6.2.3 ToggleWrapper per blocchi toggleable (toggleSection con `<details>`) | ✅ |
+| 6.3 | Custom Inline Content (Entity Tags & Mentions) | | ✅ |
+| | | 6.3.1 `createReactInlineContentSpec` — entityMention con UUID + entityType | ✅ |
+| | | 6.3.2 `SuggestionMenuController` per trigger `@` | ✅ |
+| | | 6.3.3 `getMentionMenuItems` — query + filtro + `insertInlineContent` | ✅ |
+| 6.4 | Integrazione Crypto Web Worker | | ✅ |
+| | | 6.4.1 Spawning Web Worker dedicato per Argon2id + Ed25519 | ✅ |
+| | | 6.4.2 Comunicazione tipizzata con CryptoWorkerClient | ✅ |
+| | | 6.4.3 UI unlock dual-mode (unlock secret + bootstrap primo accesso) | ✅ |
+| 6.5 | Integrazione CRDT/Yjs | | ✅ |
+| | | 6.5.1 DocumentSyncEngine — Yjs ↔ BlockNote via serialized JSON text | ✅ |
+| | | 6.5.2 DocumentsSocketTransport — SecSync su WebSocket con documents-backend | ✅ |
+| | | 6.5.3 Indicatore di stato connessione (idle/syncing/offline/resync_required) | ✅ |
+| | | 6.5.4 Pending updates queue in IndexedDB (Dexie) | ✅ |
+| | | 6.5.5 Riconnessione automatica su visibilitychange | ✅ |
+| 6.6 | Integrazione RAG in-browser | | |
+| | | 6.6.1 Web Worker per inferenza ONNX (rag-worker) | 🔲 |
+| | | 6.6.2 `OnnxEmbeddingModel` — caricamento nomic-embed-text-v1.5 via WebGPU | 🔲 |
+| | | 6.6.3 `PersistedVectorIndex` — BruteForce/HNSW con persistenza IndexedDB | 🔲 |
+| | | 6.6.4 `DocumentIndexer` — indicizzazione automatica incrementale per block UUID | 🔲 |
+| | | 6.6.5 RAG context full-text locale (fallback attivo) | ✅ |
+| 6.7 | Biometria Cognitiva & Trigger Predittivo | | ✅ |
+| | | 6.7.1 Event listener Dwell Time / Flight Time (useCognitiveSignals) | ✅ |
+| | | 6.7.2 Rilevamento pattern correttivi (Backspace frequency) | ✅ |
+| | | 6.7.3 Soglia probabilistica (hesitationScore ≥ 45) → trigger suggerimento | ✅ |
+| 6.8 | Logic Check UI & Semantic Highlighting | | |
+| | | 6.8.1 Chiamata proxy LLM REST + WebSocket streaming | ✅ |
+| | | 6.8.2 Parsing risposta JSON `evidence_chains` + panel risultati | ✅ |
 | | | 6.8.3 Marker visivo inline su testo in conflitto (Semantic Highlighting) | 🔲 |
-| 6.9 | WebSocket client & riconnessione | | 🔲 |
-| | | 6.9.1 Client WS con In-Band Auth JWT | 🔲 |
-| | | 6.9.2 Riconnessione automatica su `visibilitychange` | 🔲 |
-| | | 6.9.3 Flush buffer dal proxy al ripristino sessione | 🔲 |
+| 6.9 | WebSocket client & riconnessione | | ✅ |
+| | | 6.9.1 LogicCheckStreamClient WS con In-Band Auth JWT | ✅ |
+| | | 6.9.2 Riconnessione automatica su `visibilitychange` | ✅ |
+| | | 6.9.3 Flush buffer (BUFFER_FLUSH) dal proxy al ripristino sessione | ✅ |
+| 6.10 | Auth UI completa | | ✅ |
+| | | 6.10.1 Pagine login, register, verify-email, forgot/reset-password | ✅ |
+| | | 6.10.2 Routing con middleware (SessionBootstrap, RequireAuth, RequireUnlock) | ✅ |
+| | | 6.10.3 Zustand store auth + unlock + editor | ✅ |
+| 6.11 | Settings UI | | ✅ |
+| | | 6.11.1 Profilo utente (displayName, email, status) | ✅ |
+| | | 6.11.2 Security suite (TOTP setup, Passkey registration, Recovery kit, Unlock rotation) | ✅ |
+| | | 6.11.3 Gestione sessioni (lista, revoca singola, logout globale) | ✅ |
+| 6.12 | Persistenza locale | | ✅ |
+| | | 6.12.1 Dexie DB — tabelle documents, snapshots, pendingUpdates | ✅ |
+| | | 6.12.2 Snapshot locale cifrato con AES-GCM | ✅ |
+| | | 6.12.3 Fallback offline su cache locale | ✅ |
 
 ---
 
@@ -220,10 +266,22 @@ Legenda stati: ✅ Completato | 🔲 Da fare
 |------|---------|-------|------|-------|
 | 0 | Scaffolding | ✅ | — | ✅ |
 | 1 | shared | ✅ | 6/6 | ✅ |
-| 2 | crypto | ✅ | 17/17 | ✅ |
-| 3 | crdt | ✅ | 11/11 | ✅ |
-| 4 | rag | ✅ | 16/16 | ✅ |
-| 5 | proxy-backend | ✅ | 25/25 | ✅ |
-| 6 | frontend | — | — | 🔲 |
+| 2 | crypto | ✅ | 19/19 | ✅ |
+| 3 | crdt | ✅ | 10/10 | ✅ |
+| 4 | rag | ✅ | 14/14 | ✅ |
+| 5 | proxy-backend | ✅ | 36/36 | ✅ |
+| 5b | account-backend + shared | ✅ | 5/5 | ✅ |
+| 5c | documents-backend + shared | ✅ | 2/2 | ✅ |
+| 6 | frontend | ✅ | — | ~90% |
 
-**Totale test: 75/75 ✅** — **Completamento backend: 100%** — **Frontend: da implementare**
+**Totale test backend: 92 ✅** — **Completamento backend: 100%**
+
+### Task rimanenti (Fase 6)
+
+| # | Task | Priorità |
+|---|------|----------|
+| 6.6.1 | RAG Worker ONNX — Web Worker per inferenza embedding | Alta |
+| 6.6.2 | `OnnxEmbeddingModel` — caricamento modello via WebGPU | Alta |
+| 6.6.3 | `PersistedVectorIndex` — indice vettoriale con persistenza IndexedDB | Alta |
+| 6.6.4 | `DocumentIndexer` — indicizzazione incrementale automatica | Alta |
+| 6.8.3 | Semantic Highlighting — marker visivi inline su conflitti | Media |
