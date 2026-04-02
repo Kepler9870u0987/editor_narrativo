@@ -704,13 +704,33 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       })
     : devLlmProvider;
 
+  // Fetch JWKS from account-backend for JWT verification in dev
+  const accountBaseUrl = process.env.ACCOUNT_BASE_URL ?? 'http://127.0.0.1:4000';
+  let jwtJWKS: import('jose').JSONWebKeySet | undefined;
+  let jwtSecret: string | undefined = process.env.JWT_SECRET;
+  if (!jwtSecret) {
+    try {
+      const resp = await fetch(`${accountBaseUrl}/.well-known/jwks.json`);
+      if (resp.ok) {
+        jwtJWKS = await resp.json() as import('jose').JSONWebKeySet;
+        console.log('proxy-backend: using JWKS from account-backend');
+      }
+    } catch {
+      console.warn('proxy-backend: could not fetch JWKS from account-backend, using dev secret');
+    }
+    if (!jwtJWKS) {
+      jwtSecret = 'dev-only-secret-must-be-at-least-32-bytes-long!!';
+    }
+  }
+
   createServer({
     port,
     host,
     llmProvider,
     jwtIssuer: process.env.JWT_ISSUER,
     jwtAudience: process.env.JWT_AUDIENCE,
-    ...(process.env.JWT_SECRET ? { jwtSecret: process.env.JWT_SECRET } : {}),
+    ...(jwtSecret ? { jwtSecret } : {}),
+    ...(jwtJWKS ? { jwtJWKS } : {}),
     allowedOrigins: ['http://127.0.0.1:5173', 'http://localhost:5173'],
   })
     .then((server) => server.listen({ port, host }))

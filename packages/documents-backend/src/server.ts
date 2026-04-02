@@ -519,7 +519,25 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const host = process.env.HOST ?? '127.0.0.1';
   const jwtIssuer = process.env.JWT_ISSUER;
   const jwtAudience = process.env.JWT_AUDIENCE;
-  const jwtSecret = process.env.JWT_SECRET;
+  let jwtSecret = process.env.JWT_SECRET;
+  let jwtJWKS: import('jose').JSONWebKeySet | undefined;
+
+  // In dev, fetch JWKS from account-backend
+  if (!jwtSecret) {
+    const accountBaseUrl = process.env.ACCOUNT_BASE_URL ?? 'http://127.0.0.1:4000';
+    try {
+      const resp = await fetch(`${accountBaseUrl}/.well-known/jwks.json`);
+      if (resp.ok) {
+        jwtJWKS = await resp.json() as import('jose').JSONWebKeySet;
+        console.log('documents-backend: using JWKS from account-backend');
+      }
+    } catch {
+      // account-backend not running yet
+    }
+    if (!jwtJWKS) {
+      jwtSecret = 'dev-only-secret-must-be-at-least-32-bytes-long!!';
+    }
+  }
 
   createDocumentsServer({
     port,
@@ -527,8 +545,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     jwtIssuer,
     jwtAudience,
     ...(jwtSecret ? { jwtSecret } : {}),
+    ...(jwtJWKS ? { jwtJWKS } : {}),
   })
     .then(({ server }) => server.listen({ port, host }))
+    .then((address) => console.log(`documents-backend listening on ${address}`))
     .catch((error) => {
       console.error(error);
       process.exitCode = 1;
