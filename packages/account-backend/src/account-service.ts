@@ -39,6 +39,7 @@ import {
   MemoryAccountRepository,
   type AccountUserRecord,
   type AuditEventRecord,
+  type LoginAttemptRecord,
   type PasskeyCredentialRecord,
   type TotpFactorRecord,
   type UserSessionRecord,
@@ -55,6 +56,23 @@ const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const ACCESS_TOKEN_TTL_SECONDS = 15 * 60;
 const PASSKEY_CHALLENGE_TTL_MS = 5 * 60 * 1000;
 const MIN_PASSWORD_LENGTH = 12;
+
+/** Lockout thresholds: after N failures, lock for M milliseconds */
+const LOCKOUT_TIERS: Array<{ threshold: number; durationMs: number }> = [
+  { threshold: 5, durationMs: 15 * 60 * 1000 },   // 5 failures → 15 min
+  { threshold: 10, durationMs: 60 * 60 * 1000 },   // 10 failures → 1 hour
+  { threshold: 20, durationMs: 24 * 60 * 60 * 1000 }, // 20 failures → 24 hours
+];
+
+function computeLockoutDuration(failedCount: number): number | null {
+  let durationMs: number | null = null;
+  for (const tier of LOCKOUT_TIERS) {
+    if (failedCount >= tier.threshold) {
+      durationMs = tier.durationMs;
+    }
+  }
+  return durationMs;
+}
 
 export interface RequestContext {
   ip: string | null;
@@ -116,9 +134,9 @@ export interface AccountService {
   revokeSession(userId: string, sessionId: string, context: RequestContext): Promise<void>;
   bootstrapKeys(userId: string, input: BootstrapKeysRequest): Promise<WrappedKeyMaterialRecord>;
   getWrappedKeyMaterial(userId: string): Promise<WrappedKeyMaterialRecord | null>;
-  rotateUnlock(userId: string, input: BootstrapKeysRequest): Promise<WrappedKeyMaterialRecord>;
-  exportRecoveryKit(userId: string): Promise<RecoveryExportResponse>;
-  importRecoveryKit(userId: string, input: BootstrapKeysRequest): Promise<WrappedKeyMaterialRecord>;
+  rotateUnlock(userId: string, input: BootstrapKeysRequest, mfaCode?: string): Promise<WrappedKeyMaterialRecord>;
+  exportRecoveryKit(userId: string, mfaCode?: string): Promise<RecoveryExportResponse>;
+  importRecoveryKit(userId: string, input: BootstrapKeysRequest, mfaCode?: string): Promise<WrappedKeyMaterialRecord>;
   setupTotp(userId: string): Promise<TotpSetupResponse>;
   verifyTotpSetup(userId: string, code: string): Promise<TotpVerifyResponse>;
   startPasskeyRegistration(userId: string): Promise<PasskeyRegisterStartResponse>;
@@ -332,6 +350,28 @@ export async function createAccountService(
     return user;
   }
 
+  /**
+   * Step-up MFA: require a TOTP code for sensitive operations when the
+   * user has MFA enabled. If MFA is not enabled, this is a no-op.
+   *
+   * @throws ServiceError 403 mfa_required — if MFA is enabled but no code provided
+   * @throws ServiceError 403 mfa_invalid — if MFA code is wrong
+   */
+  async function requireStepUpMfa(userId: string, mfaCode: string | undefined): Promise<void> {
+    const totpFactor = repository.getTotpFactor(userId);
+    if (!totpFactor?.enabledAt) {
+      // MFA not enabled — nothing to verify
+      return;
+    }
+    if (!mfaCode) {
+      throw new ServiceError(403, 'mfa_required', 'MFA verification required for this operation');
+    }
+    const valid = verifyTotpCode(totpFactor.secret, mfaCode);
+    if (!valid) {
+      throw new ServiceError(403, 'mfa_invalid', 'Invalid MFA code');
+    }
+  }
+
   async function authenticate(token: string): Promise<{
     payload: AccessTokenPayload;
     user: AccountUserRecord;
@@ -492,6 +532,18 @@ export async function createAccountService(
         throw new ServiceError(401, 'invalid_credentials', 'Invalid credentials');
       }
 
+      // ── Lockout check ──────────────────────────────────
+      const attempts = repository.getLoginAttempts(user.id);
+      if (attempts?.lockedUntil && attempts.lockedUntil > new Date()) {
+        const retryAfterSeconds = Math.ceil((attempts.lockedUntil.getTime() - Date.now()) / 1000);
+        appendAuditEvent('login_locked', context, {
+          email: emailNormalized,
+          failedCount: attempts.failedCount,
+          retryAfterSeconds,
+        }, user.id, null, 90);
+        throw new ServiceError(429, 'account_locked', `Account temporarily locked. Retry after ${retryAfterSeconds} seconds`);
+      }
+
       const credential = repository.getCredential(user.id);
       if (!credential) {
         throw new ServiceError(500, 'credential_missing', 'Credential missing');
@@ -503,7 +555,12 @@ export async function createAccountService(
         passwordPepper,
       );
       if (!passwordOk) {
-        appendAuditEvent('login_failed', context, { email: emailNormalized }, user.id, null, 60);
+        const now = new Date();
+        const currentCount = (attempts?.failedCount ?? 0) + 1;
+        const lockDurationMs = computeLockoutDuration(currentCount);
+        const lockedUntil = lockDurationMs ? new Date(now.getTime() + lockDurationMs) : null;
+        repository.recordLoginFailure(user.id, now, lockedUntil);
+        appendAuditEvent('login_failed', context, { email: emailNormalized, failedCount: currentCount }, user.id, null, 60);
         throw new ServiceError(401, 'invalid_credentials', 'Invalid credentials');
       }
 
@@ -535,10 +592,18 @@ export async function createAccountService(
         }
 
         if (!validSecondFactor) {
-          appendAuditEvent('login_failed', context, { email: emailNormalized, mfa: true }, user.id, null, 80);
+          const now = new Date();
+          const currentCount = (attempts?.failedCount ?? 0) + 1;
+          const lockDurationMs = computeLockoutDuration(currentCount);
+          const lockedUntil = lockDurationMs ? new Date(now.getTime() + lockDurationMs) : null;
+          repository.recordLoginFailure(user.id, now, lockedUntil);
+          appendAuditEvent('login_failed', context, { email: emailNormalized, mfa: true, failedCount: currentCount }, user.id, null, 80);
           throw new ServiceError(401, 'invalid_mfa', 'Invalid multi-factor authentication code');
         }
       }
+
+      // ── Login successful — reset lockout counter ─────
+      repository.resetLoginAttempts(user.id);
 
       const { session, refreshToken, now } = createSessionForUser(user, context, input.deviceName);
       repository.createSession(session);
@@ -748,11 +813,14 @@ export async function createAccountService(
     async rotateUnlock(
       userId: string,
       input: BootstrapKeysRequest,
+      mfaCode?: string,
     ): Promise<WrappedKeyMaterialRecord> {
+      await requireStepUpMfa(userId, mfaCode);
       return persistKeyMaterial(userId, input);
     },
 
-    async exportRecoveryKit(userId: string): Promise<RecoveryExportResponse> {
+    async exportRecoveryKit(userId: string, mfaCode?: string): Promise<RecoveryExportResponse> {
+      await requireStepUpMfa(userId, mfaCode);
       const record = repository.getWrappedKeyMaterial(userId);
       if (!record?.recoveryKit) {
         throw new ServiceError(404, 'recovery_kit_missing', 'Recovery kit not found');
@@ -764,7 +832,9 @@ export async function createAccountService(
     async importRecoveryKit(
       userId: string,
       input: BootstrapKeysRequest,
+      mfaCode?: string,
     ): Promise<WrappedKeyMaterialRecord> {
+      await requireStepUpMfa(userId, mfaCode);
       return persistKeyMaterial(userId, input);
     },
 

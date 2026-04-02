@@ -7,6 +7,7 @@ import type {
   AuditEventRecord,
   AuthCredentialRecord,
   EmailVerificationTokenRecord,
+  LoginAttemptRecord,
   PasswordResetTokenRecord,
   PasskeyCredentialRecord,
   TotpFactorRecord,
@@ -168,6 +169,13 @@ export class SQLiteAccountRepository implements AccountRepository {
       CREATE INDEX IF NOT EXISTS idx_passkeys_user_id ON passkey_credentials(user_id);
       CREATE INDEX IF NOT EXISTS idx_webauthn_challenge_lookup ON webauthn_challenges(user_id, type, challenge);
       CREATE INDEX IF NOT EXISTS idx_audit_events_user_id ON audit_events(user_id, occurred_at);
+
+      CREATE TABLE IF NOT EXISTS login_attempts (
+        user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        failed_count INTEGER NOT NULL DEFAULT 0,
+        last_failed_at TEXT NULL,
+        locked_until TEXT NULL
+      );
     `);
   }
 
@@ -753,5 +761,37 @@ export class SQLiteAccountRepository implements AccountRepository {
         .prepare('SELECT * FROM audit_events ORDER BY occurred_at ASC')
         .all() as Row[]
     ).map((row) => this.mapAuditEvent(row));
+  }
+
+  getLoginAttempts(userId: string): LoginAttemptRecord | null {
+    const row = this.database
+      .prepare('SELECT * FROM login_attempts WHERE user_id = ?')
+      .get(userId) as Row | undefined;
+    if (!row) return null;
+    return {
+      userId: String(row.user_id),
+      failedCount: Number(row.failed_count),
+      lastFailedAt: toNullableDate(row.last_failed_at),
+      lockedUntil: toNullableDate(row.locked_until),
+    };
+  }
+
+  recordLoginFailure(userId: string, now: Date, lockedUntil: Date | null): void {
+    this.database
+      .prepare(`
+        INSERT INTO login_attempts (user_id, failed_count, last_failed_at, locked_until)
+        VALUES (?, 1, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET
+          failed_count = login_attempts.failed_count + 1,
+          last_failed_at = excluded.last_failed_at,
+          locked_until = excluded.locked_until
+      `)
+      .run(userId, now.toISOString(), lockedUntil?.toISOString() ?? null);
+  }
+
+  resetLoginAttempts(userId: string): void {
+    this.database
+      .prepare('DELETE FROM login_attempts WHERE user_id = ?')
+      .run(userId);
   }
 }

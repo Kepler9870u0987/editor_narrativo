@@ -274,7 +274,7 @@ Legenda stati: ✅ Completato | 🔲 Da fare
 | 5c | documents-backend + shared | ✅ | 2/2 | ✅ |
 | 6 | frontend | ✅ | — | ✅ |
 
-**Totale test backend: 92 ✅** — **Frontend unit tests: 38 ✅** — **Completamento: 100%**
+**Totale test backend: 101 ✅** — **Frontend unit tests: 38 ✅** — **RAG tests: 27 ✅** — **Completamento: 100%**
 
 ---
 
@@ -294,6 +294,20 @@ Legenda stati: ✅ Completato | 🔲 Da fare
 | 7.5.5 | rag-context.test.ts — normalizeTerms, scoreChunk (9 test) | ✅ |
 | 7.6 | Infrastruttura Playwright E2E — config con webServer, reporter HTML, progetto Chromium | ✅ |
 | 7.6.1 | Smoke test E2E: caricamento app, pagina login, pagina registrazione | ✅ |
+
+---
+
+## Fase 8 — Security Hardening & Performance Finale ✅
+
+| # | Task | Stato |
+|---|------|-------|
+| 8.1 | Account lockout progressivo (5→15min, 10→1hr, 20→24hr) con LOCKOUT_TIERS e computeLockoutDuration | ✅ |
+| 8.2 | Validazione Zod su account-backend (11 schema) e documents-backend (4 schema) con zodParse helper | ✅ |
+| 8.3 | IVFIndex — Inverted File Index con k-means++ clustering, O(n/k·nProbe) alternativa a BruteForce (11 test) | ✅ |
+| 8.4 | ONNX model download/caching via Cache API con progress callback (model-cache.ts + integrazione OnnxEmbeddingModel) | ✅ |
+| 8.5 | MFA step-up per operazioni critiche: rotate-unlock, recovery export/import richiedono TOTP se attivo | ✅ |
+| 8.6 | CSP report-uri endpoint su proxy-backend (/csp-report) + direttiva report-uri nella CSP frontend | ✅ |
+| 8.7 | Rate limit fingerprinting IP+User-Agent su tutti e 3 i backend per miglior granularità dietro NAT | ✅ |
 
 ---
 

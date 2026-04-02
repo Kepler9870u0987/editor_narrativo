@@ -5,6 +5,7 @@ import fastifyWebsocket from '@fastify/websocket';
 import fastifyRateLimit from '@fastify/rate-limit';
 import type { WebSocket } from '@fastify/websocket';
 import type { JSONWebKeySet } from 'jose';
+import { ZodError } from 'zod';
 import {
   createJWTVerifier,
   type JWTVerifier,
@@ -18,6 +19,12 @@ import type {
   UpdateDocumentRequest,
 } from '@editor-narrativo/documents-shared';
 import { SQLiteDocumentsRepository } from './repository.js';
+import {
+  CreateDocumentRequestSchema,
+  UpdateDocumentRequestSchema,
+  PutSnapshotRequestSchema,
+  PostUpdatesBatchRequestSchema,
+} from './validation.js';
 
 const FASTIFY_BODY_LIMIT_BYTES = 512 * 1024;
 
@@ -77,105 +84,32 @@ function expectRecord(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function parseCreateDocumentRequest(value: unknown): CreateDocumentRequest {
-  const record = expectRecord(value);
-  if (
-    typeof record.title !== 'string' ||
-    (record.kind !== 'manuscript' && record.kind !== 'story_bible' && record.kind !== 'notes')
-  ) {
-    throw new Error('Invalid document create request');
+function zodParse<T>(schema: { parse: (v: unknown) => T }, value: unknown): T {
+  try {
+    return schema.parse(value);
+  } catch (err) {
+    if (err instanceof ZodError) {
+      const message = err.issues.map((e) => e.message).join('; ');
+      throw new Error(message);
+    }
+    throw new Error('Invalid payload');
   }
+}
 
-  return {
-    title: record.title,
-    kind: record.kind,
-  };
+function parseCreateDocumentRequest(value: unknown): CreateDocumentRequest {
+  return zodParse(CreateDocumentRequestSchema, value);
 }
 
 function parseUpdateDocumentRequest(value: unknown): UpdateDocumentRequest {
-  const record = expectRecord(value);
-  if (
-    record.title !== undefined &&
-    typeof record.title !== 'string'
-  ) {
-    throw new Error('Invalid document update request');
-  }
-  if (
-    record.archived !== undefined &&
-    typeof record.archived !== 'boolean'
-  ) {
-    throw new Error('Invalid document update request');
-  }
-
-  return {
-    ...(typeof record.title === 'string' ? { title: record.title } : {}),
-    ...(typeof record.archived === 'boolean' ? { archived: record.archived } : {}),
-  };
+  return zodParse(UpdateDocumentRequestSchema, value);
 }
 
 function parseSnapshotRequest(value: unknown): PutSnapshotRequest {
-  const record = expectRecord(value);
-  const snapshot = expectRecord(record.snapshot);
-  if (
-    typeof snapshot.documentId !== 'string' ||
-    typeof snapshot.snapshotId !== 'string' ||
-    typeof snapshot.encryptedData !== 'string' ||
-    typeof snapshot.iv !== 'string' ||
-    typeof snapshot.signature !== 'string' ||
-    typeof snapshot.publicKey !== 'string' ||
-    typeof snapshot.clock !== 'number' ||
-    typeof snapshot.createdAt !== 'string'
-  ) {
-    throw new Error('Invalid snapshot payload');
-  }
-  return {
-    snapshot: {
-      documentId: snapshot.documentId,
-      snapshotId: snapshot.snapshotId,
-      encryptedData: snapshot.encryptedData,
-      iv: snapshot.iv,
-      signature: snapshot.signature,
-      publicKey: snapshot.publicKey,
-      clock: snapshot.clock,
-      createdAt: snapshot.createdAt,
-    },
-  };
+  return zodParse(PutSnapshotRequestSchema, value);
 }
 
 function parseUpdatesBatchRequest(value: unknown): PostUpdatesBatchRequest {
-  const record = expectRecord(value);
-  if (!Array.isArray(record.updates)) {
-    throw new Error('Invalid updates payload');
-  }
-
-  const updates = record.updates.map((item) => {
-    const update = expectRecord(item);
-    if (
-      typeof update.documentId !== 'string' ||
-      typeof update.updateId !== 'string' ||
-      typeof update.encryptedData !== 'string' ||
-      typeof update.iv !== 'string' ||
-      typeof update.signature !== 'string' ||
-      typeof update.publicKey !== 'string' ||
-      typeof update.clock !== 'number' ||
-      typeof update.createdAt !== 'string'
-    ) {
-      throw new Error('Invalid updates payload');
-    }
-
-    return {
-      documentId: update.documentId,
-      updateId: update.updateId,
-      encryptedData: update.encryptedData,
-      iv: update.iv,
-      signature: update.signature,
-      publicKey: update.publicKey,
-      clock: update.clock,
-      createdAt: update.createdAt,
-    };
-  });
-
-  return { updates };
+  return zodParse(PostUpdatesBatchRequestSchema, value);
 }
 
 function parseWSMessage(value: unknown): DocumentWSClientMessage | null {
@@ -308,7 +242,10 @@ export async function createDocumentsServer(config: DocumentsServerConfig) {
       if (auth && auth.startsWith('Bearer ')) {
         return auth;
       }
-      return request.ip;
+      const ua = Array.isArray(request.headers['user-agent'])
+        ? request.headers['user-agent'][0] ?? ''
+        : request.headers['user-agent'] ?? '';
+      return `${request.ip}|${ua}`;
     },
   });
 

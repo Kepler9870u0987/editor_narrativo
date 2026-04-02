@@ -92,6 +92,13 @@ export interface WebAuthnChallengeRecord {
   usedAt: Date | null;
 }
 
+export interface LoginAttemptRecord {
+  userId: string;
+  failedCount: number;
+  lastFailedAt: Date | null;
+  lockedUntil: Date | null;
+}
+
 export interface AuditEventRecord {
   id: string;
   userId: string | null;
@@ -134,6 +141,9 @@ export interface AccountRepository {
   consumeWebAuthnChallenge(userId: string, type: WebAuthnChallengeRecord['type'], challenge: string, now: Date): WebAuthnChallengeRecord | null;
   appendAuditEvent(event: AuditEventRecord): void;
   listAuditEvents(): AuditEventRecord[];
+  getLoginAttempts(userId: string): LoginAttemptRecord | null;
+  recordLoginFailure(userId: string, now: Date, lockedUntil: Date | null): void;
+  resetLoginAttempts(userId: string): void;
   close?(): void;
 }
 
@@ -345,5 +355,25 @@ export class MemoryAccountRepository implements AccountRepository {
 
   listAuditEvents(): AuditEventRecord[] {
     return [...this.auditEvents];
+  }
+
+  private readonly loginAttempts = new Map<string, LoginAttemptRecord>();
+
+  getLoginAttempts(userId: string): LoginAttemptRecord | null {
+    return this.loginAttempts.get(userId) ?? null;
+  }
+
+  recordLoginFailure(userId: string, now: Date, lockedUntil: Date | null): void {
+    const existing = this.loginAttempts.get(userId);
+    this.loginAttempts.set(userId, {
+      userId,
+      failedCount: (existing?.failedCount ?? 0) + 1,
+      lastFailedAt: now,
+      lockedUntil,
+    });
+  }
+
+  resetLoginAttempts(userId: string): void {
+    this.loginAttempts.delete(userId);
   }
 }

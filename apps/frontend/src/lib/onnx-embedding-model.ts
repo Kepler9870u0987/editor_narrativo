@@ -7,6 +7,7 @@
  */
 
 import type { EmbeddingModel, EmbeddingModelConfig } from '@editor-narrativo/rag';
+import { getOrDownloadModel, type ProgressCallback } from './model-cache.js';
 
 interface WorkerResponse {
   type: 'INIT_DONE' | 'EMBED_DONE' | 'ERROR';
@@ -28,11 +29,13 @@ export class OnnxEmbeddingModel implements EmbeddingModel {
   private _dim: number;
   private _maxTokens: number;
   private config: EmbeddingModelConfig;
+  private onDownloadProgress?: ProgressCallback;
 
-  constructor(config: EmbeddingModelConfig) {
+  constructor(config: EmbeddingModelConfig, onDownloadProgress?: ProgressCallback) {
     this.config = config;
     this._dim = config.dim;
     this._maxTokens = config.maxTokens;
+    this.onDownloadProgress = onDownloadProgress;
   }
 
   get dim(): number {
@@ -76,9 +79,16 @@ export class OnnxEmbeddingModel implements EmbeddingModel {
       }
     });
 
+    // Download/cache the model before sending to worker
+    const modelBlobUrl = await getOrDownloadModel(
+      this.config.modelPath,
+      this.onDownloadProgress,
+    );
+
     const result = await this.request<{ dim: number }>({
       type: 'INIT',
       modelPath: this.config.modelPath,
+      modelBlobUrl,
       executionProviders: this.config.executionProviders,
     });
 

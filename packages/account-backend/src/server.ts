@@ -1,6 +1,8 @@
 import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyRateLimit from '@fastify/rate-limit';
+import { ZodError } from 'zod';
 import type {
   ApiErrorResponse,
   BootstrapKeysRequest,
@@ -23,6 +25,19 @@ import {
   type RequestContext,
 } from './account-service.js';
 import { SQLiteAccountRepository } from './sqlite-repository.js';
+import {
+  RegisterRequestSchema,
+  VerifyEmailRequestSchema,
+  LoginRequestSchema,
+  ForgotPasswordRequestSchema,
+  ResetPasswordRequestSchema,
+  UpdateProfileRequestSchema,
+  BootstrapKeysRequestSchema,
+  TotpVerifyRequestSchema,
+  PasskeyRegisterFinishRequestSchema,
+  PasskeyLoginStartRequestSchema,
+  PasskeyLoginFinishRequestSchema,
+} from './validation.js';
 
 const FASTIFY_BODY_LIMIT_BYTES = 128 * 1024;
 const DEFAULT_COOKIE_NAME = 'refresh_token';
@@ -48,6 +63,25 @@ class RequestError extends Error {
     super(message);
     this.statusCode = statusCode;
   }
+}
+
+function zodParse<T>(schema: { parse: (v: unknown) => T }, value: unknown): T {
+  try {
+    return schema.parse(value);
+  } catch (err) {
+    if (err instanceof ZodError) {
+      const message = err.issues.map((e) => e.message).join('; ');
+      throw new RequestError(400, message);
+    }
+    throw new RequestError(400, 'Invalid payload');
+  }
+}
+
+function expectRecord(value: unknown): Record<string, unknown> {
+  if (typeof value !== 'object' || value === null) {
+    throw new RequestError(400, 'Invalid payload');
+  }
+  return value as Record<string, unknown>;
 }
 
 function normalizeOrigin(origin: string): string | null {
@@ -170,199 +204,6 @@ function asErrorResponse(error: unknown): { statusCode: number; body: ApiErrorRe
   };
 }
 
-function expectRecord(value: unknown): Record<string, unknown> {
-  if (typeof value !== 'object' || value === null) {
-    throw new RequestError(400, 'Invalid payload');
-  }
-  return value as Record<string, unknown>;
-}
-
-function parseRegisterRequest(value: unknown): RegisterRequest {
-  const record = expectRecord(value);
-  if (typeof record.email !== 'string' || typeof record.password !== 'string') {
-    throw new RequestError(400, 'Invalid register request');
-  }
-  return {
-    email: record.email,
-    password: record.password,
-    ...(typeof record.displayName === 'string' ? { displayName: record.displayName } : {}),
-  };
-}
-
-function parseVerifyEmailRequest(value: unknown): VerifyEmailRequest {
-  const record = expectRecord(value);
-  if (typeof record.email !== 'string' || typeof record.token !== 'string') {
-    throw new RequestError(400, 'Invalid verify-email request');
-  }
-  return { email: record.email, token: record.token };
-}
-
-function parseLoginRequest(value: unknown): LoginRequest {
-  const record = expectRecord(value);
-  if (typeof record.email !== 'string' || typeof record.password !== 'string') {
-    throw new RequestError(400, 'Invalid login request');
-  }
-  return {
-    email: record.email,
-    password: record.password,
-    ...(typeof record.totpCode === 'string' ? { totpCode: record.totpCode } : {}),
-    ...(typeof record.recoveryCode === 'string' ? { recoveryCode: record.recoveryCode } : {}),
-    ...(typeof record.deviceName === 'string' ? { deviceName: record.deviceName } : {}),
-  };
-}
-
-function parseForgotPasswordRequest(value: unknown): ForgotPasswordRequest {
-  const record = expectRecord(value);
-  if (typeof record.email !== 'string') {
-    throw new RequestError(400, 'Invalid forgot-password request');
-  }
-  return { email: record.email };
-}
-
-function parseResetPasswordRequest(value: unknown): {
-  email: string;
-  token: string;
-  newPassword: string;
-} {
-  const record = expectRecord(value);
-  if (
-    typeof record.email !== 'string' ||
-    typeof record.token !== 'string' ||
-    typeof record.newPassword !== 'string'
-  ) {
-    throw new RequestError(400, 'Invalid reset-password request');
-  }
-
-  return {
-    email: record.email,
-    token: record.token,
-    newPassword: record.newPassword,
-  };
-}
-
-function parseUpdateProfileRequest(value: unknown): UpdateProfileRequest {
-  const record = expectRecord(value);
-  if (
-    record.displayName !== undefined &&
-    record.displayName !== null &&
-    typeof record.displayName !== 'string'
-  ) {
-    throw new RequestError(400, 'Invalid update-profile request');
-  }
-  return {
-    ...(record.displayName !== undefined ? { displayName: record.displayName as string | null } : {}),
-  };
-}
-
-function parseBootstrapKeysRequest(value: unknown): BootstrapKeysRequest {
-  const record = expectRecord(value);
-  if (
-    typeof record.wrappedDek !== 'string' ||
-    typeof record.argon2Salt !== 'string' ||
-    typeof record.wrappedSigningSecretKey !== 'string' ||
-    typeof record.signingPublicKey !== 'string' ||
-    typeof record.kekVersion !== 'number'
-  ) {
-    throw new RequestError(400, 'Invalid key bootstrap request');
-  }
-
-  return {
-    wrappedDek: record.wrappedDek,
-    argon2Salt: record.argon2Salt,
-    wrappedSigningSecretKey: record.wrappedSigningSecretKey,
-    signingPublicKey: record.signingPublicKey,
-    kekVersion: record.kekVersion,
-    ...(typeof record.recoveryKit === 'string' || record.recoveryKit === null
-      ? { recoveryKit: record.recoveryKit as string | null }
-      : {}),
-  };
-}
-
-function parseTotpVerifyRequest(value: unknown): TotpVerifyRequest {
-  const record = expectRecord(value);
-  if (typeof record.code !== 'string') {
-    throw new RequestError(400, 'Invalid TOTP verify request');
-  }
-  return { code: record.code };
-}
-
-function parsePasskeyRegisterFinishRequest(value: unknown): PasskeyRegisterFinishRequest {
-  const record = expectRecord(value);
-  const credential = expectRecord(record.credential);
-  const response = expectRecord(credential.response);
-  if (
-    typeof credential.id !== 'string' ||
-    typeof credential.rawId !== 'string' ||
-    credential.type !== 'public-key' ||
-    typeof response.clientDataJSON !== 'string' ||
-    typeof response.attestationObject !== 'string'
-  ) {
-    throw new RequestError(400, 'Invalid passkey registration payload');
-  }
-
-  return {
-    credential: {
-      id: credential.id,
-      rawId: credential.rawId,
-      type: 'public-key',
-      response: {
-        clientDataJSON: response.clientDataJSON,
-        attestationObject: response.attestationObject,
-        ...(Array.isArray(response.transports)
-          ? {
-              transports: response.transports.filter(
-                (item): item is string => typeof item === 'string',
-              ),
-            }
-          : {}),
-      },
-    },
-  };
-}
-
-function parsePasskeyLoginStartRequest(value: unknown): PasskeyLoginStartRequest {
-  const record = expectRecord(value);
-  if (typeof record.email !== 'string') {
-    throw new RequestError(400, 'Invalid passkey login request');
-  }
-  return { email: record.email };
-}
-
-function parsePasskeyLoginFinishRequest(value: unknown): PasskeyLoginFinishRequest {
-  const record = expectRecord(value);
-  const credential = expectRecord(record.credential);
-  const response = expectRecord(credential.response);
-  if (
-    typeof record.email !== 'string' ||
-    typeof credential.id !== 'string' ||
-    typeof credential.rawId !== 'string' ||
-    credential.type !== 'public-key' ||
-    typeof response.clientDataJSON !== 'string' ||
-    typeof response.authenticatorData !== 'string' ||
-    typeof response.signature !== 'string'
-  ) {
-    throw new RequestError(400, 'Invalid passkey assertion payload');
-  }
-
-  return {
-    email: record.email,
-    ...(typeof record.deviceName === 'string' ? { deviceName: record.deviceName } : {}),
-    credential: {
-      id: credential.id,
-      rawId: credential.rawId,
-      type: 'public-key',
-      response: {
-        clientDataJSON: response.clientDataJSON,
-        authenticatorData: response.authenticatorData,
-        signature: response.signature,
-        ...(typeof response.userHandle === 'string' || response.userHandle === null
-          ? { userHandle: response.userHandle as string | null }
-          : {}),
-      },
-    },
-  };
-}
-
 export async function createAccountServer(
   config: AccountServerConfig,
 ): Promise<AccountServerContext> {
@@ -389,7 +230,12 @@ export async function createAccountServer(
   await server.register(fastifyRateLimit, {
     max: 60,
     timeWindow: '1 minute',
-    keyGenerator: (request) => request.ip,
+    keyGenerator: (request) => {
+      const ua = Array.isArray(request.headers['user-agent'])
+        ? request.headers['user-agent'][0] ?? ''
+        : request.headers['user-agent'] ?? '';
+      return `${request.ip}|${ua}`;
+    },
   });
 
   server.addHook('onRequest', async (request, reply) => {
@@ -431,13 +277,20 @@ export async function createAccountServer(
     };
   }
 
+  function readMfaCode(request: any): string | undefined {
+    const header = request.headers['x-mfa-code'];
+    if (typeof header === 'string' && header.length > 0) return header;
+    if (typeof request.body?.mfaCode === 'string' && request.body.mfaCode.length > 0) return request.body.mfaCode;
+    return undefined;
+  }
+
   server.get('/health', async () => ({ status: 'ok' }));
   server.get('/.well-known/jwks.json', async () => accountService.getJWKS());
 
   server.post('/auth/register', async (request, reply) => {
     try {
       const result = await accountService.register(
-        parseRegisterRequest(request.body),
+        zodParse(RegisterRequestSchema, request.body),
         getRequestContext(request),
       );
       return reply.code(201).send(result);
@@ -450,7 +303,7 @@ export async function createAccountServer(
   server.post('/auth/verify-email', async (request, reply) => {
     try {
       const profile = await accountService.verifyEmail(
-        parseVerifyEmailRequest(request.body),
+        zodParse(VerifyEmailRequestSchema, request.body),
         getRequestContext(request),
       );
       return reply.send({ verified: true, user: profile });
@@ -463,7 +316,7 @@ export async function createAccountServer(
   server.post('/auth/login', async (request, reply) => {
     try {
       const result = await accountService.login(
-        parseLoginRequest(request.body),
+        zodParse(LoginRequestSchema, request.body),
         getRequestContext(request),
       );
       reply.header(
@@ -535,7 +388,7 @@ export async function createAccountServer(
   server.post('/auth/password/forgot', async (request, reply) => {
     try {
       const result = await accountService.forgotPassword(
-        parseForgotPasswordRequest(request.body).email,
+        zodParse(ForgotPasswordRequestSchema, request.body).email,
         getRequestContext(request),
       );
       return reply.code(202).send(result);
@@ -547,7 +400,7 @@ export async function createAccountServer(
 
   server.post('/auth/password/reset', async (request, reply) => {
     try {
-      const body = parseResetPasswordRequest(request.body);
+      const body = zodParse(ResetPasswordRequestSchema, request.body);
       await accountService.resetPassword(
         body.email,
         body.token,
@@ -575,7 +428,7 @@ export async function createAccountServer(
   server.post('/auth/mfa/totp/verify', async (request, reply) => {
     try {
       const auth = await authenticateRequest(request);
-      const body = parseTotpVerifyRequest(request.body);
+      const body = zodParse(TotpVerifyRequestSchema, request.body);
       const result = await accountService.verifyTotpSetup(auth.userId, body.code);
       return reply.send(result);
     } catch (error) {
@@ -600,7 +453,7 @@ export async function createAccountServer(
       return reply.send(
         await accountService.finishPasskeyRegistration(
           auth.userId,
-          parsePasskeyRegisterFinishRequest(request.body).credential,
+          zodParse(PasskeyRegisterFinishRequestSchema, request.body).credential,
           getRequestContext(request),
         ),
       );
@@ -612,7 +465,7 @@ export async function createAccountServer(
 
   server.post('/auth/passkeys/login/start', async (request, reply) => {
     try {
-      const body = parsePasskeyLoginStartRequest(request.body);
+      const body = zodParse(PasskeyLoginStartRequestSchema, request.body);
       return reply.send(await accountService.startPasskeyLogin(body.email));
     } catch (error) {
       const mapped = asErrorResponse(error);
@@ -623,7 +476,7 @@ export async function createAccountServer(
   server.post('/auth/passkeys/login/finish', async (request, reply) => {
     try {
       const result = await accountService.finishPasskeyLogin(
-        parsePasskeyLoginFinishRequest(request.body),
+        zodParse(PasskeyLoginFinishRequestSchema, request.body),
         getRequestContext(request),
       );
       reply.header(
@@ -658,7 +511,7 @@ export async function createAccountServer(
       const auth = await authenticateRequest(request);
       const result = await accountService.updateProfile(
         auth.userId,
-        parseUpdateProfileRequest(request.body),
+        zodParse(UpdateProfileRequestSchema, request.body),
       );
       return reply.send(result);
     } catch (error) {
@@ -698,7 +551,7 @@ export async function createAccountServer(
       return reply.send(
         await accountService.bootstrapKeys(
           auth.userId,
-          parseBootstrapKeysRequest(request.body),
+          zodParse(BootstrapKeysRequestSchema, request.body),
         ),
       );
     } catch (error) {
@@ -727,7 +580,8 @@ export async function createAccountServer(
       return reply.send(
         await accountService.rotateUnlock(
           auth.userId,
-          parseBootstrapKeysRequest(request.body),
+          zodParse(BootstrapKeysRequestSchema, request.body),
+          readMfaCode(request),
         ),
       );
     } catch (error) {
@@ -739,7 +593,7 @@ export async function createAccountServer(
   server.post('/me/keys/recovery/export', async (request, reply) => {
     try {
       const auth = await authenticateRequest(request);
-      return reply.send(await accountService.exportRecoveryKit(auth.userId));
+      return reply.send(await accountService.exportRecoveryKit(auth.userId, readMfaCode(request)));
     } catch (error) {
       const mapped = asErrorResponse(error);
       return reply.code(mapped.statusCode).send(mapped.body);
@@ -749,8 +603,8 @@ export async function createAccountServer(
   server.post('/me/keys/recovery/import', async (request, reply) => {
     try {
       const auth = await authenticateRequest(request);
-      const body = parseBootstrapKeysRequest(request.body) as RecoveryImportRequest;
-      return reply.send(await accountService.importRecoveryKit(auth.userId, body));
+      const body = zodParse(BootstrapKeysRequestSchema, request.body) as RecoveryImportRequest;
+      return reply.send(await accountService.importRecoveryKit(auth.userId, body, readMfaCode(request)));
     } catch (error) {
       const mapped = asErrorResponse(error);
       return reply.code(mapped.statusCode).send(mapped.body);
@@ -758,4 +612,24 @@ export async function createAccountServer(
   });
 
   return { server, accountService };
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const port = Number(process.env.PORT ?? '4000');
+  const host = process.env.HOST ?? '127.0.0.1';
+
+  createAccountServer({
+    port,
+    host,
+    issuer: process.env.JWT_ISSUER ?? `http://${host}:${port}`,
+    audience: process.env.JWT_AUDIENCE ?? 'editor-narrativo',
+    secureCookies: false,
+    allowedOrigins: ['http://127.0.0.1:5173', 'http://localhost:5173'],
+  })
+    .then(({ server }) => server.listen({ port, host }))
+    .then((address) => console.log(`account-backend listening on ${address}`))
+    .catch((error) => {
+      console.error(error);
+      process.exitCode = 1;
+    });
 }

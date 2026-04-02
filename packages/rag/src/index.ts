@@ -12,4 +12,5 @@ export {
   type VectorIndex,
   type SearchResult,
 } from './vector-index.js';
+export { IVFIndex, type IVFConfig } from './ivf-index.js';
 export { RAGPipeline, type RAGPipelineConfig, type IndexedDocument } from './rag-pipeline.js';

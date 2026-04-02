@@ -9,6 +9,7 @@
  */
 
 import Fastify from 'fastify';
+import { pathToFileURL } from 'node:url';
 import fastifyWebsocket from '@fastify/websocket';
 import fastifyRateLimit from '@fastify/rate-limit';
 import type { WebSocket } from '@fastify/websocket';
@@ -27,7 +28,7 @@ import {
 } from './session-buffer.js';
 import { buildLogicCheckPrompt, parseLogicCheckResponse } from './prompt-builder.js';
 import { createJWTVerifier } from './auth.js';
-import type { LLMProvider, LLMMessage } from './llm-provider.js';
+import type { LLMProvider, LLMMessage } from './llm-provider.js';\nimport { OpenAICompatibleProvider } from './llm-provider.js';
 import {
   parseLogicCheckRequest,
   parseWSClientMessage,
@@ -263,12 +264,15 @@ export async function createServer(config: ServerConfig) {
     timeWindow: '1 minute',
     keyGenerator: (request) => {
       // Use user identity from JWT for authenticated requests,
-      // fall back to IP for unauthenticated (stricter limit applied at route level)
+      // fall back to IP + User-Agent fingerprint for unauthenticated
       const auth = request.headers.authorization;
       if (auth && auth.startsWith('Bearer ')) {
         return auth;
       }
-      return request.ip;
+      const ua = Array.isArray(request.headers['user-agent'])
+        ? request.headers['user-agent'][0] ?? ''
+        : request.headers['user-agent'] ?? '';
+      return `${request.ip}|${ua}`;
     },
   });
 
@@ -350,6 +354,20 @@ export async function createServer(config: ServerConfig) {
 
   // ── Health Check ─────────────────────────────────────────
   server.get('/health', async () => ({ status: 'ok' }));
+
+  // ── CSP Violation Reports ────────────────────────────────
+  server.post('/csp-report', async (request, reply) => {
+    try {
+      const body = request.body as Record<string, unknown> | null;
+      const report = body?.['csp-report'] ?? body;
+      if (report && typeof report === 'object') {
+        server.log.warn({ cspReport: report }, 'CSP violation report');
+      }
+    } catch {
+      // Ignore malformed reports
+    }
+    return reply.code(204).send();
+  });
 
   // ── REST Endpoint (non-streaming) ────────────────────────
   server.post('/api/llm/complete', async (request, reply) => {
@@ -654,4 +672,50 @@ export async function createServer(config: ServerConfig) {
   });
 
   return server;
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const port = Number(process.env.PORT ?? '4010');
+  const host = process.env.HOST ?? '127.0.0.1';
+
+  // Dev-mode stub provider: echoes back a no-conflict result
+  const devLlmProvider: LLMProvider = {
+    streamCompletion(_messages, callbacks) {
+      const controller = new AbortController();
+      setTimeout(() => {
+        const result = JSON.stringify({
+          hasConflict: false,
+          conflicts: [],
+          evidence_chains: [],
+        });
+        callbacks.onToken(result);
+        callbacks.onComplete(result);
+      }, 100);
+      return controller;
+    },
+  };
+
+  const llmProvider: LLMProvider = process.env.LLM_API_KEY
+    ? new OpenAICompatibleProvider({
+        apiKey: process.env.LLM_API_KEY,
+        baseUrl: process.env.LLM_BASE_URL ?? 'https://api.openai.com/v1',
+        model: process.env.LLM_MODEL ?? 'gpt-4o-mini',
+      })
+    : devLlmProvider;
+
+  createServer({
+    port,
+    host,
+    llmProvider,
+    jwtIssuer: process.env.JWT_ISSUER,
+    jwtAudience: process.env.JWT_AUDIENCE,
+    ...(process.env.JWT_SECRET ? { jwtSecret: process.env.JWT_SECRET } : {}),
+    allowedOrigins: ['http://127.0.0.1:5173', 'http://localhost:5173'],
+  })
+    .then((server) => server.listen({ port, host }))
+    .then((address) => console.log(`proxy-backend listening on ${address}`))
+    .catch((error) => {
+      console.error(error);
+      process.exitCode = 1;
+    });
 }

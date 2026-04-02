@@ -14,6 +14,8 @@ interface InitRequest {
   type: 'INIT';
   id: string;
   modelPath: string;
+  /** Pre-resolved blob URL (from Cache API). If provided, used instead of modelPath. */
+  modelBlobUrl?: string;
   executionProviders: string[];
 }
 
@@ -144,7 +146,7 @@ async function handleInit(request: InitRequest): Promise<WorkerResponse> {
       providers.push('wasm');
     }
 
-    session = await ort.InferenceSession.create(request.modelPath, {
+    session = await ort.InferenceSession.create(request.modelBlobUrl ?? request.modelPath, {
       executionProviders: providers,
     });
 
