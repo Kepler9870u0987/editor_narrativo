@@ -28,7 +28,8 @@ import {
 } from './session-buffer.js';
 import { buildLogicCheckPrompt, parseLogicCheckResponse } from './prompt-builder.js';
 import { createJWTVerifier } from './auth.js';
-import type { LLMProvider, LLMMessage } from './llm-provider.js';\nimport { OpenAICompatibleProvider } from './llm-provider.js';
+import type { LLMMessage } from './llm-provider.js';
+import { OpenAICompatibleProvider, type LLMProvider } from './llm-provider.js';
 import {
   parseLogicCheckRequest,
   parseWSClientMessage,
