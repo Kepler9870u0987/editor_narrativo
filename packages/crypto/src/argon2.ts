@@ -54,7 +54,11 @@ export async function deriveKEK(
       sodium.crypto_pwhash_ALG_ARGON2ID13,
     );
 
-    return kek.buffer as ArrayBuffer;
+    // Copy out of WASM heap — kek.buffer may be a SharedArrayBuffer
+    // when COOP/COEP headers are active, which cannot be transferred.
+    const result = new ArrayBuffer(kek.byteLength);
+    new Uint8Array(result).set(kek);
+    return result;
   } finally {
     passwordBytes.fill(0);
   }

@@ -23,6 +23,9 @@ export function SettingsNav() {
       <Link className="button button--ghost" to="/settings/security">
         Sicurezza
       </Link>
+      <Link className="button button--ghost" to="/settings/llm">
+        LLM
+      </Link>
       <button
         className="button button--danger"
         onClick={async () => {

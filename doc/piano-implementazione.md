@@ -274,7 +274,7 @@ Legenda stati: ✅ Completato | 🔲 Da fare
 | 5c | documents-backend + shared | ✅ | 2/2 | ✅ |
 | 6 | frontend | ✅ | — | ✅ |
 
-**Totale test backend: 101 ✅** — **Frontend unit tests: 38 ✅** — **RAG tests: 27 ✅** — **Completamento: 100%**
+**Totale test backend: 101 ✅** — **Frontend unit tests: 62 ✅** — **RAG tests: 27 ✅** — **Completamento: 100%**
 
 ---
 
@@ -311,6 +311,121 @@ Legenda stati: ✅ Completato | 🔲 Da fare
 
 ---
 
-### Task rimanenti
+---
 
-Nessun task rimanente. Tutte le funzionalità previste sono implementate.
+## Fase 9 — RAG Chat Interface + LLM Client + Pressure Control
+
+> Ispirato da SocraticEngine. Tutto zero-knowledge, local-first, CSS puro (no Tailwind).
+
+### 9.1 — LLM Client Service e Config Cifrata
+
+| # | Task | Subtask | Stato |
+|---|------|---------|-------|
+| 9.1.1 | LLM Client Service | | ✅ |
+| | | 9.1.1.1 `LLMConfig` interface (provider, apiKey, baseUrl, model) | ✅ |
+| | | 9.1.1.2 `streamChatCompletion()` — async generator SSE, OpenAI-compatible | ✅ |
+| | | 9.1.1.3 `testLLMConnection()` — non-streaming connectivity test | ✅ |
+| 9.1.2 | LLM Config Store cifrata | | ✅ |
+| | | 9.1.2.1 `saveLLMConfig(config, encryptionKey)` — AES-GCM via @editor-narrativo/crypto | ✅ |
+| | | 9.1.2.2 `loadLLMConfig(encryptionKey)` → LLMConfig | null | ✅ |
+| | | 9.1.2.3 `clearLLMConfig()` | ✅ |
+| 9.1.3 | Schema Dexie v3 | | ✅ |
+| | | 9.1.3.1 Aggiungere tabella `llmConfig` con campo `encryptedBlob` | ✅ |
+
+**File nuovi:** `lib/llm-client.ts`, `lib/llm-config-store.ts`
+**File modificati:** `lib/storage.ts`
+
+### 9.2 — Pagina Settings LLM
+
+| # | Task | Subtask | Stato |
+|---|------|---------|-------|
+| 9.2.1 | Settings LLM Page | | ✅ |
+| | | 9.2.1.1 Form: Base URL, API Key (masked), Modello | ✅ |
+| | | 9.2.1.2 Bottone "Test connessione" con feedback | ✅ |
+| | | 9.2.1.3 Salvataggio cifrato via `saveLLMConfig()` | ✅ |
+| 9.2.2 | Navigazione settings | | ✅ |
+| | | 9.2.2.1 Voce "Configurazione LLM" in `settings-nav.tsx` | ✅ |
+| | | 9.2.2.2 Route `/settings/llm` in `router.tsx` | ✅ |
+
+**File nuovi:** `features/settings/settings-llm-page.tsx`
+**File modificati:** `features/settings/settings-nav.tsx`, `app/router.tsx`
+
+### 9.3 — Pressure Control (GlobalPressureControls)
+
+| # | Task | Subtask | Stato |
+|---|------|---------|-------|
+| 9.3.1 | Stato pressureLevel | | ✅ |
+| | | 9.3.1.1 `pressureLevel: 1-5` (default 2) in `editor-store.ts` | ✅ |
+| | | 9.3.1.2 `setPressureLevel()` action | ✅ |
+| | | 9.3.1.3 Persistenza in localStorage | ✅ |
+| 9.3.2 | Componente PressureControl | | ✅ |
+| | | 9.3.2.1 Slider range 1-5, label "Intensità feedback AI" | ✅ |
+| | | 9.3.2.2 Indicatore visivo livello (L1=blando → L5=critico) | ✅ |
+| 9.3.3 | Integrazione editor toolbar | | ✅ |
+| | | 9.3.3.1 `<PressureControl />` nella `.editor-surface__toolbar` | ✅ |
+| | | 9.3.3.2 `pressureLevel` nel system prompt logic check | ✅ |
+| 9.3.4 | Stili CSS `.pressure-control` | | ✅ |
+
+**File nuovi:** `features/editor/pressure-control.tsx`
+**File modificati:** `features/editor/editor-store.ts`, `features/editor/editor-app-page.tsx`, `styles/app.css`
+
+### 9.4 — RAG Chat Interface
+
+| # | Task | Subtask | Stato |
+|---|------|---------|-------|
+| 9.4.1 | Stato chat in editor-store | | ✅ |
+| | | 9.4.1.1 `RagChatMessage` type (id, role, content, citations) | ✅ |
+| | | 9.4.1.2 `ragChatMessages[]`, `addRagChatMessage()`, `clearRagChatMessages()` | ✅ |
+| | | 9.4.1.3 `ragChatOpen: boolean` + toggle | ✅ |
+| 9.4.2 | Componente RagChatPanel | | ✅ |
+| | | 9.4.2.1 Header: titolo, status indicizzazione, bottone Clear | ✅ |
+| | | 9.4.2.2 Area messaggi scrollabile con auto-scroll | ✅ |
+| | | 9.4.2.3 Citazioni `[N]` come componenti React (NO dangerouslySetInnerHTML) | ✅ |
+| | | 9.4.2.4 Bottoni citazione cliccabili sotto risposte AI | ✅ |
+| | | 9.4.2.5 Input form + bottone stop streaming | ✅ |
+| | | 9.4.2.6 Stati: modello non pronto, documento non indicizzato, errore | ✅ |
+| 9.4.3 | Logica query RAG locale | | ✅ |
+| | | 9.4.3.1 Query vettoriale via `DocumentIndexer.search()` | ✅ |
+| | | 9.4.3.2 Fallback `buildLocalRagContext()` se indexer vuoto | ✅ |
+| | | 9.4.3.3 System prompt con contesto citato `[1]...[N]` + pressureLevel | ✅ |
+| | | 9.4.3.4 Streaming via `streamChatCompletion()` + AbortController | ✅ |
+| 9.4.4 | Integrazione editor layout | | ✅ |
+| | | 9.4.4.1 Toggle apertura chat nella toolbar | ✅ |
+| | | 9.4.4.2 Layout: inspector split 50/50 (alerts+logic | chat) | ✅ |
+| 9.4.5 | Stili CSS `.rag-chat` | | ✅ |
+
+**File nuovi:** `features/editor/rag-chat-panel.tsx`
+**File modificati:** `features/editor/editor-store.ts`, `features/editor/editor-app-page.tsx`, `styles/app.css`
+
+### 9.5 — Model Status & Download UX
+
+| # | Task | Subtask | Stato |
+|---|------|---------|-------|
+| 9.5.1 | Stato modello in editor-store | | ✅ |
+| | | 9.5.1.1 `modelStatus: 'idle'|'loading'|'ready'|'error'` | ✅ |
+| | | 9.5.1.2 `modelDownloadProgress: number (0-1)` | ✅ |
+| 9.5.2 | Callback progresso in OnnxEmbeddingModel | | ✅ |
+| | | 9.5.2.1 Propagazione `onProgress` in init() → aggiorna store | ✅ |
+| 9.5.3 | Badge status nel RAG chat panel | | ✅ |
+
+**File modificati:** `features/editor/editor-store.ts`, `lib/onnx-embedding-model.ts`, `features/editor/rag-chat-panel.tsx`
+
+---
+
+### Riepilogo Fase 9
+
+| Sub-fase | File nuovi | File modificati |
+|----------|-----------|----------------|
+| 9.1 LLM Client + Config | `lib/llm-client.ts`, `lib/llm-config-store.ts` | `lib/storage.ts` |
+| 9.2 Settings LLM | `features/settings/settings-llm-page.tsx` | `features/settings/settings-nav.tsx`, `app/router.tsx` |
+| 9.3 Pressure Control | `features/editor/pressure-control.tsx` | `features/editor/editor-store.ts`, `styles/app.css` |
+| 9.4 RAG Chat | `features/editor/rag-chat-panel.tsx` | `features/editor/editor-store.ts`, `features/editor/editor-app-page.tsx`, `styles/app.css` |
+| 9.5 Model Status | — | `features/editor/editor-store.ts`, `lib/onnx-embedding-model.ts` |
+
+**Decisioni architetturali:**
+- NO Tailwind — CSS puro con variabili CSS
+- NO backend RAG — query vettoriale resta locale (PersistedVectorIndex)
+- NO `dangerouslySetInnerHTML` — citazioni [N] come componenti React (XSS-safe)
+- NO Ollama bridge — fuori scope (Fase 10 futura)
+- API key cifrata in IndexedDB con AES-GCM (mai in localStorage)
+- Esclusi: InterventionPanel, InterventionFeed, LensPanel, PhilosopherLensToolbar

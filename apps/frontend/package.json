@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@blocknote/core": "^0.18.0",
+    "@blocknote/mantine": "^0.18.1",
     "@blocknote/react": "^0.18.0",
     "@editor-narrativo/account-shared": "workspace:*",
     "@editor-narrativo/crdt": "workspace:*",

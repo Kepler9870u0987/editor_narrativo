@@ -7,7 +7,8 @@ import {
   useState,
   type FormEvent,
 } from 'react';
-import { BlockNoteViewRaw, SuggestionMenuController, useCreateBlockNote } from '@blocknote/react';
+import { SuggestionMenuController, useCreateBlockNote } from '@blocknote/react';
+import { BlockNoteView } from '@blocknote/mantine';
 import type { DocumentKind, DocumentSummary } from '@editor-narrativo/documents-shared';
 import type { LogicCheckResponse } from '@editor-narrativo/shared';
 import { appEnv } from '../../lib/env';
@@ -36,6 +37,8 @@ import { buildLocalRagContext } from './rag-context';
 import { applySemanticHighlights } from './semantic-highlighting';
 import { useCognitiveSignals } from './use-cognitive-signals';
 import { OnnxEmbeddingModel, defaultOnnxEmbeddingConfig } from '../../lib/onnx-embedding-model';
+import { PressureControl } from './pressure-control';
+import { RagChatPanel } from './rag-chat-panel';
 
 const EMPTY_DOCUMENT: NarrativePartialBlock[] = [
   {
@@ -131,6 +134,9 @@ function NarrativeWorkspace({
   const unlocked = useUnlockStore((state) => state.unlocked);
   const setSyncStateStore = useEditorStore((state) => state.setSyncState);
   const setLogicCheckResult = useEditorStore((state) => state.setLogicCheckResult);
+  const ragChatOpen = useEditorStore((state) => state.ragChatOpen);
+  const toggleRagChat = useEditorStore((state) => state.toggleRagChat);
+  const pressureLevel = useEditorStore((state) => state.pressureLevel);
   const [initialBlocks, setInitialBlocks] = useState<NarrativePartialBlock[] | null>(null);
   const [localClock, setLocalClock] = useState(0);
   const [syncState, setSyncState] = useState<DocumentSyncState>('idle');
@@ -222,6 +228,13 @@ function NarrativeWorkspace({
         return;
       }
       const blocks = parseSerializedBlocks(serialized);
+      // Prevent remote updates from replacing non-empty local content with empty doc
+      const isIncomingEmpty = blocks.length === 1
+        && blocks[0].type === 'paragraph'
+        && (blocks[0] as any).content === EMPTY_DOCUMENT[0].content;
+      if (isIncomingEmpty && editor.document.length > 1) {
+        return;
+      }
       lastSerializedRef.current = JSON.stringify(blocks);
       replaceEditorContents(editor, blocks);
       startTransition(() => {
@@ -300,7 +313,13 @@ function NarrativeWorkspace({
   useEffect(() => {
     if (!initialBlocks) return;
 
-    const embeddingModel = new OnnxEmbeddingModel(defaultOnnxEmbeddingConfig());
+    const setModelStatus = useEditorStore.getState().setModelStatus;
+    const setModelProgress = useEditorStore.getState().setModelDownloadProgress;
+
+    setModelStatus('loading');
+    const embeddingModel = new OnnxEmbeddingModel(defaultOnnxEmbeddingConfig(), (progress) => {
+      setModelProgress(progress.progress);
+    });
     const indexer = new DocumentIndexer({
       documentId: document.id,
       embeddingModel,
@@ -309,10 +328,12 @@ function NarrativeWorkspace({
 
     // Init is async — warm up model + load persisted vectors
     void indexer.init().then(() => {
+      setModelStatus('ready');
       // Index the initial content
       const blocks = editor.document as unknown as NarrativeBlockLike[];
       void indexer.updateIndex(blocks);
     }).catch(() => {
+      setModelStatus('error');
       // ONNX model may not be available; RAG falls back to full-text
     });
 
@@ -401,7 +422,7 @@ function NarrativeWorkspace({
   }
 
   return (
-    <div className="editor-layout">
+    <div className={`editor-layout${ragChatOpen ? ' editor-layout--with-chat' : ''}`}>
       <aside className="sidebar stack">
         <div className="panel stack">
           <span className="pill">{document.kind}</span>
@@ -446,10 +467,18 @@ function NarrativeWorkspace({
             <button className="button button--ghost" onClick={() => void syncEngineRef.current?.createSnapshot()} type="button">
               Snapshot remoto
             </button>
+            <button
+              className={`button ${ragChatOpen ? 'button--success' : 'button--ghost'}`}
+              onClick={toggleRagChat}
+              type="button"
+            >
+              RAG Chat
+            </button>
+            <PressureControl />
           </div>
         </div>
         <div className="editor-surface__content" ref={hostRef}>
-          <BlockNoteViewRaw editor={editor} theme="light">
+          <BlockNoteView editor={editor} theme="light" slashMenu={false} emojiPicker={false}>
             <SuggestionMenuController
               triggerCharacter="/"
               getItems={async (query) => filterSlashItems(editor, query)}
@@ -458,29 +487,40 @@ function NarrativeWorkspace({
               triggerCharacter="@"
               getItems={async (query) => getMentionMenuItems(editor, entities, query)}
             />
-          </BlockNoteViewRaw>
+          </BlockNoteView>
         </div>
       </section>
 
-      <aside className="inspector stack">
-        <div className="panel stack">
-          <h3>Alert narrativi</h3>
-          {alerts.length === 0 ? <p className="muted">Nessun alert nel documento.</p> : null}
-          {alerts.map((alert) => (
-            <div className="list-item" key={alert.id}>
-              <strong>{alert.title}</strong>
-              <p className="muted">{alert.severity}</p>
-              <p>{alert.description}</p>
-            </div>
-          ))}
+      <aside className="inspector">
+        <div className="inspector__panels">
+          <div className="panel stack">
+            <h3>Alert narrativi</h3>
+            {alerts.length === 0 ? <p className="muted">Nessun alert nel documento.</p> : null}
+            {alerts.map((alert) => (
+              <div className="list-item" key={alert.id}>
+                <strong>{alert.title}</strong>
+                <p className="muted">{alert.severity}</p>
+                <p>{alert.description}</p>
+              </div>
+            ))}
+          </div>
+          <div className="panel stack">
+            <h3>Logic check</h3>
+            {logicBusy ? <p className="muted">Analisi in corso...</p> : null}
+            {streaming && streamText ? <pre>{streamText}</pre> : null}
+            {logicResult ? <LogicResultPanel result={logicResult} /> : <p className="muted">Nessuna analisi disponibile.</p>}
+          </div>
+          {runtimeError ? <p className="error">{runtimeError}</p> : null}
         </div>
-        <div className="panel stack">
-          <h3>Logic check</h3>
-          {logicBusy ? <p className="muted">Analisi in corso...</p> : null}
-          {streaming && streamText ? <pre>{streamText}</pre> : null}
-          {logicResult ? <LogicResultPanel result={logicResult} /> : <p className="muted">Nessuna analisi disponibile.</p>}
-        </div>
-        {runtimeError ? <p className="error">{runtimeError}</p> : null}
+        {ragChatOpen && (
+          <div className="inspector__chat">
+            <RagChatPanel
+              documentId={document.id}
+              indexer={indexerRef.current}
+              encryptionKey={unlocked.subKeys.textEncryptionKey}
+            />
+          </div>
+        )}
       </aside>
     </div>
   );

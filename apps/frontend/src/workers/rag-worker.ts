@@ -10,6 +10,9 @@
 
 import * as ort from 'onnxruntime-web';
 
+// Configure WASM paths so onnxruntime-web finds the .wasm files via Vite
+ort.env.wasm.wasmPaths = '/node_modules/onnxruntime-web/dist/';
+
 interface InitRequest {
   type: 'INIT';
   id: string;

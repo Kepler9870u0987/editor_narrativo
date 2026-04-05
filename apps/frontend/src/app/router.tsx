@@ -14,6 +14,7 @@ import { EditorAppPage } from '../features/editor/editor-app-page';
 import { SettingsProfilePage } from '../features/settings/settings-profile-page';
 import { SettingsSessionsPage } from '../features/settings/settings-sessions-page';
 import { SettingsSecurityPage } from '../features/settings/settings-security-page';
+import { SettingsLLMPage } from '../features/settings/settings-llm-page';
 
 function SessionBootstrap() {
   const status = useAuthSessionStore((state) => state.status);
@@ -85,6 +86,7 @@ export function AppRouter() {
           <Route path="/settings/profile" element={<SettingsProfilePage />} />
           <Route path="/settings/sessions" element={<SettingsSessionsPage />} />
           <Route path="/settings/security" element={<SettingsSecurityPage />} />
+          <Route path="/settings/llm" element={<SettingsLLMPage />} />
 
           <Route element={<RequireUnlock />}>
             <Route path="/app" element={<EditorAppPage />} />

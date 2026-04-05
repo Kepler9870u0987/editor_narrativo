@@ -9,7 +9,7 @@ const securityHeaders = {
   'Cross-Origin-Opener-Policy': 'same-origin',
   'Cross-Origin-Embedder-Policy': 'require-corp',
   'Content-Security-Policy':
-    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' http: https: ws: wss:; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; report-uri /proxy/csp-report;",
+    "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' blob: http: https: ws: wss:; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; report-uri /proxy/csp-report;",
 };
 
 export default defineConfig(({ mode }) => {

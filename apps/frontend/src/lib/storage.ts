@@ -39,11 +39,19 @@ export interface StoredVectorRecord {
   updatedAt: string;
 }
 
+export interface LLMConfigRecord {
+  id: string;
+  /** AES-GCM encrypted JSON blob (base64) */
+  encryptedBlob: string;
+  updatedAt: string;
+}
+
 export class EditorDatabase extends Dexie {
   documents!: Table<LocalDocumentRecord, string>;
   snapshots!: Table<LocalEncryptedSnapshotRecord, string>;
   pendingUpdates!: Table<PendingRemoteUpdateRecord, string>;
   vectors!: Table<StoredVectorRecord, string>;
+  llmConfig!: Table<LLMConfigRecord, string>;
 
   constructor() {
     super('editor-narrativo');
@@ -57,6 +65,13 @@ export class EditorDatabase extends Dexie {
       snapshots: '&documentId, updatedAt',
       pendingUpdates: '&updateId, documentId, clock',
       vectors: '&id, documentId, blockId, updatedAt',
+    });
+    this.version(3).stores({
+      documents: '&id, updatedAt, kind, syncState',
+      snapshots: '&documentId, updatedAt',
+      pendingUpdates: '&updateId, documentId, clock',
+      vectors: '&id, documentId, blockId, updatedAt',
+      llmConfig: '&id',
     });
   }
 }

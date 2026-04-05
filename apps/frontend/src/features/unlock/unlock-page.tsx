@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { PageShell } from '../../components/page-shell';
 import { createCryptoWorkerClient } from '../../lib/crypto-worker';
@@ -23,7 +23,13 @@ export function UnlockPage() {
   const setUnlocking = useUnlockStore((state) => state.setUnlocking);
   const setUnlocked = useUnlockStore((state) => state.setUnlocked);
   const lock = useUnlockStore((state) => state.lock);
-  const worker = useMemo(() => createCryptoWorkerClient(), []);
+  const workerRef = useRef<ReturnType<typeof createCryptoWorkerClient> | null>(null);
+  function getWorker() {
+    if (!workerRef.current) {
+      workerRef.current = createCryptoWorkerClient();
+    }
+    return workerRef.current;
+  }
   const [mode, setMode] = useState<UnlockMode>('loading');
   const [unlockSecret, setUnlockSecret] = useState('');
   const [unlockSecretConfirm, setUnlockSecretConfirm] = useState('');
@@ -32,7 +38,12 @@ export function UnlockPage() {
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => () => worker.terminate(), [worker]);
+  useEffect(() => {
+    return () => {
+      workerRef.current?.terminate();
+      workerRef.current = null;
+    };
+  }, []);
 
   useEffect(() => {
     if (!accessToken) {
@@ -74,7 +85,7 @@ export function UnlockPage() {
       throw new Error('Materiale cifrato non disponibile');
     }
     setUnlocking();
-    const unlocked = await unlockWrappedKeyMaterial(material, secret, worker);
+    const unlocked = await unlockWrappedKeyMaterial(material, secret, getWorker());
     setUnlocked(unlocked);
     navigate('/app', { replace: true });
   }
@@ -112,7 +123,7 @@ export function UnlockPage() {
     setError(null);
     setMessage(null);
     try {
-      const payload = await createBootstrapKeyMaterial(unlockSecret, worker);
+      const payload = await createBootstrapKeyMaterial(unlockSecret, getWorker());
       const storedMaterial = await accountApi.bootstrapKeys(accessToken, payload);
       setMaterial(storedMaterial);
       await finishUnlock(unlockSecret);

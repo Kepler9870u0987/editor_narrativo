@@ -166,7 +166,7 @@ class DocumentsSocketTransport implements SecSyncTransport {
         this.onSyncState('idle');
         return;
       case 'SNAPSHOT':
-        if (message.snapshot) {
+        if (message.snapshot && message.snapshot.clock > this.getAfterClock()) {
           this.remoteSnapshotHandler?.(toSecSyncSnapshot(message.snapshot));
         }
         return;

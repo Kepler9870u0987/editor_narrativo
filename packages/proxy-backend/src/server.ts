@@ -357,6 +357,14 @@ export async function createServer(config: ServerConfig) {
   server.get('/health', async () => ({ status: 'ok' }));
 
   // ── CSP Violation Reports ────────────────────────────────
+  server.addContentTypeParser(
+    'application/csp-report',
+    { parseAs: 'string' },
+    (_req, body, done) => {
+      try { done(null, JSON.parse(body as string)); } catch (e) { done(e as Error, undefined); }
+    },
+  );
+
   server.post('/csp-report', async (request, reply) => {
     try {
       const body = request.body as Record<string, unknown> | null;
